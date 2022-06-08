@@ -113,6 +113,42 @@ BEGIN
 END;
 $find_latest_versions_of_accounts_on_branch$ LANGUAGE plpgsql;
 
+-----------------------------------------------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION get_pre_accounts_rooted(
+    req_id VARCHAR, 
+    max_slot BIGINT,
+    max_write_version BIGINT,
+    in_txn_signature BYTEA) 
+RETURNS TABLE (
+    pubkey BYTEA,
+    slot BIGINT,
+    write_version BIGINT,
+    signature BYTEA,
+    data BYTEA
+)
+
+AS $get_pre_accounts_rooted$
+
+BEGIN
+  RETURN QUERY 
+    SELECT DISTINCT ON (acc.pubkey)
+      acc.pubkey,
+      acc.slot,
+      acc.write_version,
+      acc.txn_signature,
+      acc.data
+    FROM account AS acc
+    WHERE
+      acc.slot <= start_slot
+      AND acc.write_version < max_write_version
+      AND acc.pubkey IN
+        (SELECT ta.pubkey
+        FROM transaction_account AS ta
+        WHERE position(in_txn_signature IN ta.signature) > 0)
+      ORDER BY
+        acc.pubkey DESC, acc.write_version DESC
+END;
+$get_pre_accounts_rooted$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_pre_accounts(req_id VARCHAR, in_txn_signature BYTEA) 
