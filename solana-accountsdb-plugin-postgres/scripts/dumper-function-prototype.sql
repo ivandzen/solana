@@ -89,7 +89,7 @@ $get_pre_accounts_one_slot$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION get_pre_accounts_branch(
   req_id VARCHAR,
   start_slot BIGINT, 
-  min_write_version BIGINT,
+  max_write_version BIGINT,
   in_txn_signature BYTEA
 )
   
@@ -123,7 +123,7 @@ BEGIN
                     SELECT get_pre_accounts_one_slot($1, $2, $3)
                     ON CONFLICT (pubkey)
                     DO NOTHING', req_id)
-    USING current_slot, min_write_version, in_txn_signature;
+    USING current_slot, max_write_version, in_txn_signature;
     
     -- If no - go further into the past - select parent slot
     SELECT s.parent
@@ -186,7 +186,7 @@ AS $get_pre_accounts$
 
 DECLARE
   current_slot BIGINT := NULL;
-  min_write_version BIGINT := NULL;
+  max_write_version BIGINT := NULL;
    
 BEGIN  
   -- create temporary tables
@@ -205,7 +205,7 @@ BEGIN
   -- Query minimum write version of account update
   SELECT 
     MIN(acc.write_version)
-  INTO min_write_version
+  INTO max_write_version
   FROM account AS acc
   WHERE position(in_txn_signature in acc.txn_signature) > 0;
  
@@ -242,7 +242,7 @@ BEGIN
     SELECT get_pre_accounts_branch(
       req_id, 
       current_slot, 
-      min_write_version, 
+      max_write_version, 
       in_txn_signature) INTO current_slot;
   END IF;
   
@@ -259,7 +259,7 @@ BEGIN
                     SELECT get_pre_accounts_root($1, $2, $3)
                     ON CONFLICT (pubkey)
                     DO NOTHING', req_id)
-    USING current_slot, min_write_version, in_txn_signature;
+    USING current_slot, max_write_version, in_txn_signature;
     
   RETURN QUERY EXECUTE format('SELECT * FROM results_%I', req_id);
     
