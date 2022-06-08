@@ -114,8 +114,7 @@ END;
 $find_latest_versions_of_accounts_on_branch$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION get_pre_accounts_rooted(
-    req_id VARCHAR, 
+CREATE OR REPLACE FUNCTION get_pre_accounts_root(
     max_slot BIGINT,
     max_write_version BIGINT,
     in_txn_signature BYTEA) 
@@ -127,7 +126,7 @@ RETURNS TABLE (
     data BYTEA
 )
 
-AS $get_pre_accounts_rooted$
+AS $get_pre_accounts_root$
 
 BEGIN
   RETURN QUERY 
@@ -148,7 +147,7 @@ BEGIN
       ORDER BY
         acc.pubkey DESC, acc.write_version DESC
 END;
-$get_pre_accounts_rooted$ LANGUAGE plpgsql;
+$get_pre_accounts_root$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_pre_accounts(req_id VARCHAR, in_txn_signature BYTEA) 
@@ -226,6 +225,7 @@ BEGIN
   
   -- Transaction found on the rooted slot or restoring state on not finalized branch is finished.
   -- Start/Continue restoring state on rooted slots.
+  
   EXECUTE format('INSERT INTO 
                       results_%I(
                         pubkey, 
@@ -233,22 +233,7 @@ BEGIN
                         write_version, 
                         signature,
                         data)
-                    SELECT DISTINCT ON (acc.pubkey)
-                      acc.pubkey,
-                      acc.slot,
-                      acc.write_version,
-                      acc.txn_signature,
-                      acc.data
-                    FROM account AS acc
-                    WHERE
-                      acc.slot <= $1
-                      AND acc.write_version < $2
-                      AND acc.pubkey IN
-                        (SELECT ta.pubkey
-                         FROM transaction_account AS ta
-                         WHERE position($3 IN ta.signature) > 0)
-                    ORDER BY
-                      acc.pubkey DESC, acc.write_version DESC
+                    SELECT get_pre_accounts_root($1, $2, $3)
                     ON CONFLICT (pubkey)
                     DO NOTHING', req_id)
     USING current_slot, min_write_version, in_txn_signature;
