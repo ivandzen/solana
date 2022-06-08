@@ -46,26 +46,61 @@ BEGIN
 END;
 $find_slot_on_longest_branch$ LANGUAGE plpgsql;
 
+-----------------------------------------------------------------------------------------------------------------------
+-- Returns pre-accounts data for given transaction on a given slot
+CREATE OR REPLACE FUNCTION get_pre_accounts_one_slot(
+    current_slot BIGINT,
+    max_write_version BIGINT,
+    in_txn_signature BYTEA
+)
+
+RETURNS TABLE (
+    pubkey BYTEA,
+    slot BIGINT,
+    write_version BIGINT,
+    signature BYTEA,
+    data BYTEA
+)
+
+AS $get_pre_accounts_one_slot$
+
+BEGIN
+  RETURN QUERY 
+    SELECT DISTINCT ON (acc.pubkey)
+      acc.pubkey,
+      acc.slot,
+      acc.write_version,
+      acc.txn_signature,
+      acc.data
+    FROM account AS acc
+    WHERE
+      acc.slot = current_slot
+      AND acc.write_version < max_write_version
+      AND acc.pubkey IN
+        (SELECT ta.pubkey
+        FROM transaction_account AS ta
+        WHERE position(in_txn_signature IN ta.signature) > 0)
+    ORDER BY
+      acc.pubkey DESC, acc.write_version DESC;
+END;
+$get_pre_accounts_one_slot$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION find_latest_versions_of_accounts_on_branch(
+CREATE OR REPLACE FUNCTION get_pre_accounts_branch(
   req_id VARCHAR,
   start_slot BIGINT, 
   min_write_version BIGINT,
-  in_txn_signature BYTEA)
+  in_txn_signature BYTEA
+)
+  
 RETURNS BIGINT --first rooted slot
-AS $find_latest_versions_of_accounts_on_branch$
+
+AS $get_pre_accounts_branch$
 DECLARE
   current_slot BIGINT := start_slot;
   current_slot_status VARCHAR := NULL;
   num_in_txn_slots INT := 0;
-BEGIN
-  -- start from topmost slot
-  SELECT s.slot 
-  INTO current_slot 
-  FROM slot AS s 
-  ORDER BY s.slot DESC LIMIT 1;
-  
+BEGIN  
   LOOP
     -- get status of current slot
     SELECT s.status 
@@ -85,24 +120,10 @@ BEGIN
                         write_version, 
                         signature,
                         data)
-                    SELECT DISTINCT ON (acc.pubkey)
-                      acc.pubkey,
-                      acc.slot,
-                      acc.write_version,
-                      acc.txn_signature,
-                      acc.data
-                    FROM account AS acc
-                    WHERE
-                      acc.slot = $1
-                      AND acc.pubkey IN
-                        (SELECT ta.pubkey
-                         FROM transaction_account AS ta
-                         WHERE position($2 IN ta.signature) > 0)
-                    ORDER BY
-                      acc.pubkey DESC, acc.write_version DESC
+                    SELECT get_pre_accounts_one_slot($1, $2, $3)
                     ON CONFLICT (pubkey)
                     DO NOTHING', req_id)
-    USING current_slot, in_txn_signature;
+    USING current_slot, min_write_version, in_txn_signature;
     
     -- If no - go further into the past - select parent slot
     SELECT s.parent
@@ -111,13 +132,15 @@ BEGIN
     WHERE s.slot = current_slot;
   END LOOP;
 END;
-$find_latest_versions_of_accounts_on_branch$ LANGUAGE plpgsql;
+$get_pre_accounts_branch$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_pre_accounts_root(
     max_slot BIGINT,
     max_write_version BIGINT,
-    in_txn_signature BYTEA) 
+    in_txn_signature BYTEA
+)
+
 RETURNS TABLE (
     pubkey BYTEA,
     slot BIGINT,
@@ -216,7 +239,7 @@ BEGIN
     
     -- Transaction found on the longest branch. Start searching recent states of accounts in this branch
     -- down to first rooted slot. This search algorithm iterates over parent slots and is slow.                    
-    SELECT find_latest_versions_of_accounts_on_branch(
+    SELECT get_pre_accounts_branch(
       req_id, 
       current_slot, 
       min_write_version, 
