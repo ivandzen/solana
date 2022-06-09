@@ -239,7 +239,7 @@ BEGIN
         IF current_slot IS NULL THEN
             -- Transaction not found on the longest branch - it exist somewhere on minor forks.
             -- Return empty list of accounts
-            RETURN;--QUERY SELECT * FROM SET();
+            RETURN;
         ELSE
             -- Transaction found on the longest branch. 
             RETURN QUERY
