@@ -48,8 +48,7 @@ END;
 $find_slot_on_longest_branch$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
--- Returns states of given accounts within a given slot
--- with write versions not much than maximum
+-- Returns pre-accounts data for given transaction on a given slot
 CREATE OR REPLACE FUNCTION get_pre_accounts_one_slot(
     current_slot BIGINT,
     max_write_version BIGINT,
@@ -259,7 +258,7 @@ BEGIN
                   SELECT * FROM get_pre_accounts_root($1, $2, $3)
                   ON CONFLICT (pubkey)
                   DO NOTHING', req_id)
-    USING current_slot, max_write_version, transaction_accounts;
+  USING current_slot, max_write_version, transaction_accounts;
     
   RETURN QUERY EXECUTE format('SELECT * FROM results_%I', req_id);
     
