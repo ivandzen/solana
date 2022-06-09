@@ -179,7 +179,7 @@ END;
 $get_pre_accounts_root$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION get_pre_accounts(req_id VARCHAR, in_txn_signature BYTEA) 
+CREATE OR REPLACE FUNCTION get_pre_accounts(in_txn_signature BYTEA) 
 RETURNS TABLE (
     pubkey BYTEA,
     slot BIGINT,
