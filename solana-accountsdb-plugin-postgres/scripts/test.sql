@@ -18,7 +18,7 @@ AS $get_pre_accounts_one_slot$
 
 BEGIN
   RETURN QUERY 
-    SELECT --DISTINCT ON (acc.pubkey)
+    SELECT
       acc.pubkey,
       acc.slot,
       acc.write_version,
@@ -29,8 +29,6 @@ BEGIN
       acc.slot = current_slot
       AND acc.write_version < max_write_version
       AND acc.pubkey IN (SELECT * FROM unnest(transaction_accounts));
-   -- ORDER BY
-   --   acc.pubkey, acc.write_version DESC;
 END;
 $get_pre_accounts_one_slot$ LANGUAGE plpgsql;
 
@@ -96,6 +94,7 @@ BEGIN
           ) AS slot_results
   ORDER BY 
     slot_results.pubkey, 
+    slot_results.slot DESC,
     slot_results.write_version DESC;
 END;
 $get_pre_accounts_branch$ LANGUAGE plpgsql;
