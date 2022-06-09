@@ -224,7 +224,7 @@ BEGIN
     LIMIT 1;
   
     -- try to find slot that was rooted with given transaction
-    SELECT INTO current_slot
+    SELECT txn_slot INTO current_slot
     FROM unnest(transaction_slots) AS txn_slot
     INNER JOIN slot AS s
     ON txn_slot = s.slot
