@@ -191,22 +191,13 @@ RETURNS TABLE (
 AS $get_pre_accounts$
 
 DECLARE
-  current_slot BIGINT := NULL;
+  current_slot BIGINT;
   max_write_version BIGINT := NULL;
   transaction_accounts BYTEA[];
   transaction_slots BIGINT[];
   first_rooted_slot BIGINT;
    
-BEGIN  
-  -- Create temporary result table
-  EXECUTE format('CREATE TEMP TABLE results_%I (
-                    pubkey BYTEA PRIMARY KEY,
-                    slot BIGINT,
-                    write_version BIGINT,
-                    signature BYTEA,
-                    data BYTEA
-                  ) ON COMMIT DROP;', req_id);
-                  
+BEGIN                    
   -- Query minimum write version of account update
   SELECT MIN(acc.write_version)
   INTO max_write_version
@@ -225,20 +216,20 @@ BEGIN
   FROM transaction AS txn
   WHERE position(in_txn_signature in txn.signature) > 0;
   
-  SELECT sl.slot INTO first_rooted_slot
+  SELECT sl.slot 
+  INTO first_rooted_slot
   FROM slot AS sl
   WHERE sl.status = 'rooted'
   ORDER BY sl.slot DESC
   LIMIT 1;
   
   -- try to find slot that was rooted with given transaction 
-  SELECT DISTINCT txn_slot
-  INTO current_slot
+  SELECT INTO current_slot
   FROM unnest(transaction_slots) AS txn_slot
   INNER JOIN slot AS s
   ON txn_slot = s.slot
-  WHERE s.status = 'rooted';
-    
+  WHERE s.status = 'rooted'
+  LIMIT 1;
   
   IF current_slot = NULL THEN 
     -- No rooted slot found. It means transaction exist on some not finalized branch. 
@@ -247,38 +238,43 @@ BEGIN
     IF current_slot = NULL THEN
         -- Transaction not found on the longest branch - it exist somewhere on minor forks.
         -- Return empty list of accounts
-        RETURN QUERY EXECUTE format('SELECT * FROM results_%I', req_id);
+        RETURN;--QUERY SELECT * FROM SET();
     END IF;
     
     -- Transaction found on the longest branch. Start searching recent states of accounts in this branch
-    -- down to first rooted slot. This search algorithm iterates over parent slots and is slow.        
-    EXECUTE format('INSERT INTO results_%I      
-                    SELECT * FROM get_pre_accounts_branch($1, $2, $3)
-                    ON CONFLICT (pubkey)
-                    DO NOTHING', req_id)
-    USING current_slot, max_write_version, transaction_accounts;
-    
-    EXECUTE format('INSERT INTO results_%I
-                    SELECT * FROM get_pre_accounts_root($1, $2, $3)
-                    ON CONFLICT (pubkey)
-                    DO NOTHING', req_id)
-    USING first_rooted_slot, max_write_version, transaction_accounts;
-    
-    RETURN QUERY EXECUTE format('SELECT * FROM results_%I', req_id);
+    -- down to first rooted slot. This search algorithm iterates over parent slots and is slow.
+    RETURN QUERY
+        WITH results AS (
+            SELECT * FROM get_pre_accounts_branch(
+                current_slot, 
+                max_write_version, 
+                transaction_accounts
+            )
+            UNION
+            SELECT * FROM get_pre_accounts_root(
+                first_rooted_slot, 
+                max_write_version, 
+                transaction_accounts
+            )
+        )
+        SELECT DISTINCT ON (res.pubkey)
+            res.pubkey,
+            res.slot,
+            res.write_version,
+            res.signature,
+            res.data
+        FROM results AS res
+        ORDER BY res.pubkey, res.slot DESC, res.write_version DESC;
   END IF;
   
   -- Transaction found on the rooted slot or restoring state on not finalized branch is finished.
   -- Start/Continue restoring state on rooted slots.
-  EXECUTE format('INSERT INTO results_%I
-                  SELECT * FROM get_pre_accounts_root($1, $2, $3)
-                  ON CONFLICT (pubkey)
-                  DO NOTHING', req_id)
-  USING current_slot, max_write_version, transaction_accounts;
-    
-  RETURN QUERY EXECUTE format('SELECT * FROM results_%I', req_id);
+  RETURN QUERY SELECT * FROM get_pre_accounts_root(
+    current_slot, 
+    max_write_version, 
+    transaction_accounts
+  );
     
 END;
 $get_pre_accounts$ LANGUAGE plpgsql;
 
-
-SELECT encode(pubkey, 'hex'), slot, write_version, encode(signature, 'hex'), data FROM get_pre_accounts('test2322', '\x620ebe2670ced0c2ea61ddd62a63725c537f3f195c91703f6b6fdcd8c6a959df6f72bd26f29f3e766635f61af86a1b3ae64dc30e5e4df787784d4155fd036d0e'::bytea);
