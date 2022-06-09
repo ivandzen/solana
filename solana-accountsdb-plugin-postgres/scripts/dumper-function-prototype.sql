@@ -231,50 +231,49 @@ BEGIN
   WHERE s.status = 'rooted'
   LIMIT 1;
   
-  IF current_slot = NULL THEN 
+  IF current_slot IS NULL THEN 
     -- No rooted slot found. It means transaction exist on some not finalized branch. 
     -- Try to find it on the longest one (search from topmost slot down to first rooted slot)
     SELECT find_slot_on_longest_branch(transaction_slots) INTO current_slot;
-    IF current_slot = NULL THEN
+    IF current_slot IS NULL THEN
         -- Transaction not found on the longest branch - it exist somewhere on minor forks.
         -- Return empty list of accounts
         RETURN;--QUERY SELECT * FROM SET();
+    ELSE
+        -- Transaction found on the longest branch. Start searching recent states of accounts in this branch
+        -- down to first rooted slot. This search algorithm iterates over parent slots and is slow.
+        RETURN QUERY
+            WITH results AS (
+                SELECT * FROM get_pre_accounts_branch(
+                    current_slot, 
+                    max_write_version, 
+                    transaction_accounts
+                )
+                UNION
+                SELECT * FROM get_pre_accounts_root(
+                    first_rooted_slot, 
+                    max_write_version, 
+                    transaction_accounts
+                )
+            )
+            SELECT DISTINCT ON (res.pubkey)
+                res.pubkey,
+                res.slot,
+                res.write_version,
+                res.signature,
+                res.data
+            FROM results AS res
+            ORDER BY res.pubkey, res.slot DESC, res.write_version DESC;
     END IF;
-    
-    -- Transaction found on the longest branch. Start searching recent states of accounts in this branch
-    -- down to first rooted slot. This search algorithm iterates over parent slots and is slow.
-    RETURN QUERY
-        WITH results AS (
-            SELECT * FROM get_pre_accounts_branch(
-                current_slot, 
-                max_write_version, 
-                transaction_accounts
-            )
-            UNION
-            SELECT * FROM get_pre_accounts_root(
-                first_rooted_slot, 
-                max_write_version, 
-                transaction_accounts
-            )
-        )
-        SELECT DISTINCT ON (res.pubkey)
-            res.pubkey,
-            res.slot,
-            res.write_version,
-            res.signature,
-            res.data
-        FROM results AS res
-        ORDER BY res.pubkey, res.slot DESC, res.write_version DESC;
+  ELSE
+    -- Transaction found on the rooted slot or restoring state on not finalized branch is finished.
+    -- Start/Continue restoring state on rooted slots.
+    RETURN QUERY SELECT * FROM get_pre_accounts_root(
+        current_slot, 
+        max_write_version, 
+        transaction_accounts
+    );
   END IF;
-  
-  -- Transaction found on the rooted slot or restoring state on not finalized branch is finished.
-  -- Start/Continue restoring state on rooted slots.
-  RETURN QUERY SELECT * FROM get_pre_accounts_root(
-    current_slot, 
-    max_write_version, 
-    transaction_accounts
-  );
-    
 END;
 $get_pre_accounts$ LANGUAGE plpgsql;
 
