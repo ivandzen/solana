@@ -195,6 +195,7 @@ DECLARE
   max_write_version BIGINT := NULL;
   transaction_accounts BYTEA[];
   transaction_slots BIGINT[];
+  first_rooted_slot BIGINT;
    
 BEGIN  
   -- Create temporary result table
@@ -224,6 +225,12 @@ BEGIN
   FROM transaction AS txn
   WHERE position(in_txn_signature in txn.signature) > 0;
   
+  SELECT sl.slot INTO first_rooted_slot
+  FROM slot AS sl
+  WHERE sl.status = 'rooted'
+  ORDER BY sl.slot DESC
+  LIMIT 1;
+  
   -- try to find slot that was rooted with given transaction 
   SELECT DISTINCT txn_slot
   INTO current_slot
@@ -250,6 +257,14 @@ BEGIN
                     ON CONFLICT (pubkey)
                     DO NOTHING', req_id)
     USING current_slot, max_write_version, transaction_accounts;
+    
+    EXECUTE format('INSERT INTO results_%I
+                    SELECT * FROM get_pre_accounts_root($1, $2, $3)
+                    ON CONFLICT (pubkey)
+                    DO NOTHING', req_id)
+    USING first_rooted_slot, max_write_version, transaction_accounts;
+    
+    RETURN QUERY EXECUTE format('SELECT * FROM results_%I', req_id);
   END IF;
   
   -- Transaction found on the rooted slot or restoring state on not finalized branch is finished.
