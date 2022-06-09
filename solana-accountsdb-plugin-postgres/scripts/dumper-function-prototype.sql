@@ -240,16 +240,20 @@ BEGIN
             -- Return empty list of accounts
             RETURN;--QUERY SELECT * FROM SET();
         ELSE
-            -- Transaction found on the longest branch. Start searching recent states of accounts in this branch
-            -- down to first rooted slot. This search algorithm iterates over parent slots and is slow.
+            -- Transaction found on the longest branch. 
             RETURN QUERY
                 WITH results AS (
+                    -- Start searching recent states of accounts in this branch
+                    -- down to first rooted slot 
+                    -- (this search algorithm iterates over parent slots and is slow).
                     SELECT * FROM get_pre_accounts_branch(
                         current_slot,
                         max_write_version,
                         transaction_accounts
                     )
                     UNION
+                    -- Then apply fast search algorithm over rooted slots 
+                    -- to obtain the rest of pre-accounts  
                     SELECT * FROM get_pre_accounts_root(
                         first_rooted_slot,
                         max_write_version,
@@ -269,8 +273,7 @@ BEGIN
                     res.write_version DESC;
         END IF;
     ELSE
-        -- Transaction found on the rooted slot or restoring state on not finalized branch is finished.
-        -- Start/Continue restoring state on rooted slots.
+        -- Transaction found on the rooted slot.
         RETURN QUERY
             SELECT * FROM get_pre_accounts_root(
                 current_slot,
