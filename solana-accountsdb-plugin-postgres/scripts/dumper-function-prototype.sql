@@ -274,8 +274,7 @@ BEGIN
                     res.write_version DESC;
         END IF;
     ELSE
-        -- Transaction found on the rooted slot or restoring state on not finalized branch is finished.
-        -- Start/Continue restoring state on rooted slots.
+        -- Transaction found on the rooted slot.
         RETURN QUERY
             SELECT * FROM get_pre_accounts_root(
                 current_slot,
