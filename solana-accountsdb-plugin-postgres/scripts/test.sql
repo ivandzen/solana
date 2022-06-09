@@ -1,9 +1,9 @@
 -----------------------------------------------------------------------------------------------------------------------
 -- Returns pre-accounts data for given transaction on a given slot
-CREATE OR REPLACE FUNCTION get_pre_accounts_one_slot2(
+CREATE OR REPLACE FUNCTION get_pre_accounts_one_slot(
     current_slot BIGINT,
     max_write_version BIGINT,
-    in_txn_signature BYTEA
+    transaction_accounts BYTEA[]
 )
 
 RETURNS TABLE (
@@ -14,11 +14,11 @@ RETURNS TABLE (
     data BYTEA
 )
 
-AS $get_pre_accounts_one_slot2$
+AS $get_pre_accounts_one_slot$
 
 BEGIN
   RETURN QUERY 
-    SELECT DISTINCT ON (acc.pubkey)
+    SELECT --DISTINCT ON (acc.pubkey)
       acc.pubkey,
       acc.slot,
       acc.write_version,
@@ -28,20 +28,16 @@ BEGIN
     WHERE
       acc.slot = current_slot
       AND acc.write_version < max_write_version
-      AND acc.pubkey IN
-        (SELECT ta.pubkey
-        FROM transaction_account AS ta
-        WHERE position(in_txn_signature IN ta.signature) > 0)
-    ORDER BY
-      acc.pubkey, acc.write_version DESC;
+      AND acc.pubkey IN (SELECT * FROM unnest(transaction_accounts));
+   -- ORDER BY
+   --   acc.pubkey, acc.write_version DESC;
 END;
-$get_pre_accounts_one_slot2$ LANGUAGE plpgsql;
+$get_pre_accounts_one_slot$ LANGUAGE plpgsql;
 
 
 
 -----------------------------------------------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION get_pre_accounts_branch2(
-  req_id VARCHAR,
+CREATE OR REPLACE FUNCTION get_pre_accounts_branch(
   start_slot BIGINT, 
   max_write_version BIGINT,
   in_txn_signature BYTEA
@@ -55,13 +51,16 @@ RETURNS TABLE (
     data BYTEA
 )
 
-AS $get_pre_accounts_branch2$
+AS $get_pre_accounts_branch$
 DECLARE
-  current_slot BIGINT := start_slot;
-  current_slot_status VARCHAR := NULL;
-  num_in_txn_slots INT := 0;
   branch_slots BIGINT[];
+  transaction_accounts BYTEA[];
 BEGIN
+  SELECT array_agg(ta.pubkey)
+  INTO transaction_accounts
+  FROM transaction_account AS ta
+  WHERE position(in_txn_signature IN ta.signature) > 0;
+        
   WITH RECURSIVE parents AS (
     SELECT 
         first.slot,
@@ -89,12 +88,14 @@ BEGIN
     slot_results.signature,
     slot_results.data
   FROM 
-    unnest(branch_slots) AS cur_slot,
-    get_pre_accounts_one_slot2(
-                cur_slot, 
+    unnest(branch_slots) AS current_slot,
+    get_pre_accounts_one_slot(
+                current_slot, 
                 max_write_version, 
-                in_txn_signature
+                transaction_accounts
           ) AS slot_results
-  ORDER BY pubkey, write_version DESC;
+  ORDER BY 
+    slot_results.pubkey, 
+    slot_results.write_version DESC;
 END;
-$get_pre_accounts_branch2$ LANGUAGE plpgsql;
+$get_pre_accounts_branch$ LANGUAGE plpgsql;
