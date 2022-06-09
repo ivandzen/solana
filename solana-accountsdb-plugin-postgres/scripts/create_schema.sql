@@ -30,8 +30,11 @@ CREATE TABLE slot (
     slot BIGINT PRIMARY KEY,
     parent BIGINT,
     status VARCHAR(16) NOT NULL,
-    updated_on TIMESTAMP NOT NULL
+    updated_on TIMESTAMP
 );
+
+INSERT INTO slot(slot, parent, status)
+VALUES (0, NULL, 'rooted');
 
 -- Types for Transactions
 
