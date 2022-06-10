@@ -1,6 +1,7 @@
 FROM postgres:14.0 AS builder
 
 COPY create_schema.sql \
+    create_functions.sql \
     drop_schema.sql \
     /opt/scripts/
 

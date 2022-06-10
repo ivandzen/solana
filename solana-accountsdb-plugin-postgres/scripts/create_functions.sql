@@ -67,7 +67,7 @@ AS $get_pre_accounts_one_slot$
 
 BEGIN
     RETURN QUERY
-        SELECT
+        SELECT DISTINCT ON (acc.pubkey)
             acc.pubkey,
             acc.slot,
             acc.write_version,
@@ -77,7 +77,10 @@ BEGIN
         WHERE
             acc.slot = current_slot
             AND acc.write_version < max_write_version
-            AND acc.pubkey IN (SELECT * FROM unnest(transaction_accounts));
+            AND acc.pubkey IN (SELECT * FROM unnest(transaction_accounts))
+        ORDER BY
+            acc.pubkey,
+            acc.write_version DESC;
 END;
 $get_pre_accounts_one_slot$ LANGUAGE plpgsql;
 
@@ -284,4 +287,38 @@ BEGIN
     END IF;
 END;
 $get_pre_accounts$ LANGUAGE plpgsql;
+
+-----------------------------------------------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION get_account_at_slot(
+    pubkey BYTEA,
+    slot BIGINT
+)
+
+RETURNS TABLE (
+    pubkey BYTEA,
+    slot BIGINT,
+    write_version BIGINT,
+    signature BYTEA,
+    data BYTEA
+)
+
+AS $get_account_at_slot$
+
+BEGIN
+    RETURN QUERY
+        SELECT
+            acc.pubkey,
+            acc.slot,
+            acc.write_version,
+            acc.txn_signature,
+            acc.data
+        FROM account AS acc
+        WHERE
+            acc.slot = slot
+            AND position(pubkey IN acc.pubkey) > 0
+        ORDER BY
+            acc.write_version DESC
+            LIMIT 1;
+END;
+$get_account_at_slot$ LANGUAGE plpgsql;
 
