@@ -290,8 +290,8 @@ $get_pre_accounts$ LANGUAGE plpgsql;
 
 -----------------------------------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_account_at_slot(
-    pubkey BYTEA,
-    slot BIGINT
+    in_pubkey BYTEA,
+    in_slot BIGINT
 )
 
 RETURNS TABLE (
@@ -314,8 +314,8 @@ BEGIN
             acc.data
         FROM account AS acc
         WHERE
-            acc.slot = slot
-            AND position(pubkey IN acc.pubkey) > 0
+            acc.slot = in_slot
+            AND position(in_pubkey IN acc.pubkey) > 0
         ORDER BY
             acc.write_version DESC
             LIMIT 1;
