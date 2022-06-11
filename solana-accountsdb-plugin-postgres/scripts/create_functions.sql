@@ -73,7 +73,7 @@ BEGIN
             acc.write_version,
             acc.txn_signature,
             acc.data
-        FROM account AS acc
+        FROM account_audit AS acc
         WHERE
             acc.slot = current_slot
             AND acc.write_version < max_write_version
@@ -170,7 +170,7 @@ BEGIN
             acc.write_version,
             acc.txn_signature,
             acc.data
-        FROM account AS acc
+        FROM account_audit AS acc
         WHERE
             acc.slot <= start_slot
             AND acc.write_version < max_write_version
@@ -204,7 +204,7 @@ BEGIN
     -- Query minimum write version of account update
     SELECT MIN(acc.write_version)
     INTO max_write_version
-    FROM account AS acc
+    FROM account_audit AS acc
     WHERE position(in_txn_signature in acc.txn_signature) > 0;
   
     -- Query all accounts required by given transaction
@@ -312,7 +312,7 @@ BEGIN
             acc.write_version,
             acc.txn_signature,
             acc.data
-        FROM account AS acc
+        FROM account_audit AS acc
         WHERE
             acc.slot <= in_slot
             AND position(in_pubkey IN acc.pubkey) > 0
