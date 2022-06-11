@@ -42,7 +42,7 @@ const MAX_ASYNC_REQUESTS: usize = 40960;
 const DEFAULT_POSTGRES_PORT: u16 = 5432;
 const DEFAULT_THREADS_COUNT: usize = 100;
 const DEFAULT_ACCOUNTS_INSERT_BATCH_SIZE: usize = 10;
-const ACCOUNT_COLUMN_COUNT: usize = 9;
+const ACCOUNT_COLUMN_COUNT: usize = 10;
 const DEFAULT_PANIC_ON_DB_ERROR: bool = false;
 const DEFAULT_STORE_ACCOUNT_HISTORICAL_DATA: bool = false;
 
@@ -340,11 +340,11 @@ impl SimplePostgresClient {
         let batch_size = config
             .batch_size
             .unwrap_or(DEFAULT_ACCOUNTS_INSERT_BATCH_SIZE);
-        let mut stmt = String::from("INSERT INTO account AS acct (pubkey, slot, owner, lamports, executable, rent_epoch, data, write_version, updated_on) VALUES");
+        let mut stmt = String::from("INSERT INTO account AS acct (pubkey, slot, owner, lamports, executable, rent_epoch, data, write_version, updated_on, txn_signature) VALUES");
         for j in 0..batch_size {
             let row = j * ACCOUNT_COLUMN_COUNT;
             let val_str = format!(
-                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
                 row + 1,
                 row + 2,
                 row + 3,
@@ -354,6 +354,7 @@ impl SimplePostgresClient {
                 row + 7,
                 row + 8,
                 row + 9,
+                row + 10,
             );
 
             if j == 0 {
@@ -364,7 +365,7 @@ impl SimplePostgresClient {
         }
 
         let handle_conflict = "ON CONFLICT (pubkey) DO UPDATE SET slot=excluded.slot, owner=excluded.owner, lamports=excluded.lamports, executable=excluded.executable, rent_epoch=excluded.rent_epoch, \
-            data=excluded.data, write_version=excluded.write_version, updated_on=excluded.updated_on WHERE acct.slot < excluded.slot OR (\
+            data=excluded.data, write_version=excluded.write_version, updated_on=excluded.updated_on, txn_signature=excluded.txn_signature WHERE acct.slot < excluded.slot OR (\
             acct.slot = excluded.slot AND acct.write_version < excluded.write_version)";
 
         stmt = format!("{} {}", stmt, handle_conflict);
@@ -389,10 +390,10 @@ impl SimplePostgresClient {
         client: &mut Client,
         config: &GeyserPluginPostgresConfig,
     ) -> Result<Statement, GeyserPluginError> {
-        let stmt = "INSERT INTO account AS acct (pubkey, slot, owner, lamports, executable, rent_epoch, data, write_version, updated_on) \
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+        let stmt = "INSERT INTO account AS acct (pubkey, slot, owner, lamports, executable, rent_epoch, data, write_version, updated_on, txn_signature) \
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
         ON CONFLICT (pubkey) DO UPDATE SET slot=excluded.slot, owner=excluded.owner, lamports=excluded.lamports, executable=excluded.executable, rent_epoch=excluded.rent_epoch, \
-        data=excluded.data, write_version=excluded.write_version, updated_on=excluded.updated_on  WHERE acct.slot < excluded.slot OR (\
+        data=excluded.data, write_version=excluded.write_version, updated_on=excluded.updated_on, txn_signature=excluded.txn_signature  WHERE acct.slot < excluded.slot OR (\
         acct.slot = excluded.slot AND acct.write_version < excluded.write_version)";
 
         let stmt = client.prepare(stmt);
@@ -519,7 +520,7 @@ impl SimplePostgresClient {
                 &account.data(),
                 &account.write_version(),
                 &updated_on,
-                &account.txn_signature,
+                &account.txn_signature(),
             ],
         );
 
@@ -558,6 +559,7 @@ impl SimplePostgresClient {
                 &account.data(),
                 &account.write_version(),
                 &updated_on,
+                &account.txn_signature(),
             ],
         );
 
@@ -638,6 +640,7 @@ impl SimplePostgresClient {
                 values.push(&account.data);
                 values.push(&account.write_version);
                 values.push(&updated_on);
+                values.push(&account.txn_signature);
             }
             measure.stop();
             inc_new_counter_debug!(
