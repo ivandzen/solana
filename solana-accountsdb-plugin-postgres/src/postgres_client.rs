@@ -520,7 +520,7 @@ impl SimplePostgresClient {
                 &account.data(),
                 &account.write_version(),
                 &updated_on,
-                &account.txn_signature,
+                &account.txn_signature(),
             ],
         );
 
