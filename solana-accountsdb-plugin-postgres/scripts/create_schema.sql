@@ -5,7 +5,7 @@
 
 
 CREATE TABLE account (
-    pubkey BYTEA,
+    pubkey BYTEA PRIMARY KEY,
     owner BYTEA,
     lamports BIGINT NOT NULL,
     slot BIGINT NOT NULL,
@@ -14,16 +14,12 @@ CREATE TABLE account (
     data BYTEA,
     write_version BIGINT NOT NULL,
     updated_on TIMESTAMP NOT NULL,
-    txn_signature BYTEA,
-
-    CONSTRAINT account_pk PRIMARY KEY (pubkey, slot, write_version)
+    txn_signature BYTEA
 );
 
 CREATE INDEX account_owner ON account (owner);
 
 CREATE INDEX account_slot ON account (slot);
-
-CREATE INDEX account_txn_signature ON account (txn_signature);
 
 -- The table storing slot information
 CREATE TABLE slot (
@@ -222,7 +218,8 @@ CREATE TABLE account_audit (
     rent_epoch BIGINT NOT NULL,
     data BYTEA,
     write_version BIGINT NOT NULL,
-    updated_on TIMESTAMP NOT NULL
+    updated_on TIMESTAMP NOT NULL,
+    txn_signature BYTEA
 );
 
 CREATE INDEX account_audit_account_key ON  account_audit (pubkey, write_version);
@@ -231,9 +228,11 @@ CREATE INDEX account_audit_pubkey_slot ON account_audit (pubkey, slot);
 
 CREATE FUNCTION audit_account_update() RETURNS trigger AS $audit_account_update$
     BEGIN
-		INSERT INTO account_audit (pubkey, owner, lamports, slot, executable, rent_epoch, data, write_version, updated_on)
+		INSERT INTO account_audit (pubkey, owner, lamports, slot, executable,
+		                           rent_epoch, data, write_version, updated_on, txn_signature)
             VALUES (OLD.pubkey, OLD.owner, OLD.lamports, OLD.slot,
-                    OLD.executable, OLD.rent_epoch, OLD.data, OLD.write_version, OLD.updated_on);
+                    OLD.executable, OLD.rent_epoch, OLD.data,
+                    OLD.write_version, OLD.updated_on, OLD.txn_signature);
         RETURN NEW;
     END;
 
