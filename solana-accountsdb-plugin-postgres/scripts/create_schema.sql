@@ -230,9 +230,9 @@ CREATE FUNCTION audit_account_update() RETURNS trigger AS $audit_account_update$
     BEGIN
 		INSERT INTO account_audit (pubkey, owner, lamports, slot, executable,
 		                           rent_epoch, data, write_version, updated_on, txn_signature)
-            VALUES (OLD.pubkey, OLD.owner, OLD.lamports, OLD.slot,
-                    OLD.executable, OLD.rent_epoch, OLD.data,
-                    OLD.write_version, OLD.updated_on, OLD.txn_signature);
+            VALUES (NEW.pubkey, NEW.owner, NEW.lamports, NEW.slot,
+                    NEW.executable, NEW.rent_epoch, NEW.data,
+                    NEW.write_version, NEW.updated_on, NEW.txn_signature);
         RETURN NEW;
     END;
 
