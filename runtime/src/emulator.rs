@@ -4,28 +4,32 @@ use {
         accounts::TransactionLoadResult,
         bank::{
             Bank,
+            DurableNonceFee,
             TransactionExecutionResult,
         },
         transaction_error_metrics::TransactionErrorMetrics,
     },
     solana_measure::measure::Measure,
-    solana_program_runtime::compute_budget::{self, ComputeBudget},
-    solana_sdk::{
-        message::SanitizedMessage,
-        transaction::{
-            SanitizedTransaction,
-            TransactionError,
-        },
+    solana_program_runtime::{
+        compute_budget::{self, ComputeBudget},
+        timings::ExecuteTimings,
     },
+    solana_sdk::{
+        feature_set::{
+            add_set_compute_unit_price_ix,
+            default_units_per_instruction,
+            requestable_heap_size,
+            tx_wide_compute_cap,
+        },
+        saturating_add_assign,
+        transaction::SanitizedTransaction,
+    },
+    log::*,
 };
 use crate::accounts::LoadedTransaction;
 use crate::bank::RentDebits;
 
 impl Bank {
-    pub fn new_for_emulation() -> Self {
-        Bank::default_for_tests()
-    }
-
     fn load_transaction(
         &self,
         _tx: &SanitizedTransaction,
@@ -40,9 +44,13 @@ impl Bank {
         (Ok(loaded_tx), None)
     }
 
-    pub fn execute_transaction(
+    pub fn emulate_transaction(
         &self,
         tx: &SanitizedTransaction,
+        enable_cpi_recording: bool,
+        enable_log_recording: bool,
+        enable_return_data_recording: bool,
+        timings: &mut ExecuteTimings,
     ) -> TransactionExecutionResult {
         let mut error_counters = TransactionErrorMetrics::default();
 
@@ -72,7 +80,7 @@ impl Bank {
                     } else {
                         compute_budget::DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT
                     };
-                    let mut compute_budget = ComputeBudget::new(combatchpute_unit_limit as u64);
+                    let mut compute_budget = ComputeBudget::new(compute_unit_limit as u64);
                     if tx_wide_compute_cap {
                         let mut compute_budget_process_transaction_time =
                             Measure::start("compute_budget_process_transaction_time");
