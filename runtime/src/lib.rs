@@ -76,6 +76,7 @@ pub mod vote_parser;
 pub mod vote_sender_types;
 pub mod vote_transaction;
 pub mod waitable_condvar;
+pub mod emulator;
 
 #[macro_use]
 extern crate solana_metrics;

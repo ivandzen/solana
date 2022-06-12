@@ -360,7 +360,7 @@ impl Clone for CachedExecutorsEntry {
 
 /// LFU Cache of executors with single-epoch memory of usage counts
 #[derive(Debug)]
-struct CachedExecutors {
+pub struct CachedExecutors {
     capacity: usize,
     current_epoch: Epoch,
     pub(self) executors: HashMap<Pubkey, CachedExecutorsEntry>,
@@ -428,7 +428,7 @@ impl CachedExecutors {
         }
     }
 
-    fn get(&self, pubkey: &Pubkey) -> Option<Arc<dyn Executor>> {
+    pub fn get(&self, pubkey: &Pubkey) -> Option<Arc<dyn Executor>> {
         if let Some(entry) = self.executors.get(pubkey) {
             self.stats.hits.fetch_add(1, Relaxed);
             entry.epoch_count.fetch_add(1, Relaxed);
@@ -440,7 +440,7 @@ impl CachedExecutors {
         }
     }
 
-    fn put(&mut self, executors: &[(&Pubkey, Arc<dyn Executor>)]) {
+    pub fn put(&mut self, executors: &[(&Pubkey, Arc<dyn Executor>)]) {
         let mut new_executors: Vec<_> = executors
             .iter()
             .filter_map(|(key, executor)| {
@@ -1313,7 +1313,7 @@ pub struct Bank {
     /// The builtin programs
     builtin_programs: BuiltinPrograms,
 
-    compute_budget: Option<ComputeBudget>,
+    pub compute_budget: Option<ComputeBudget>,
 
     /// Dynamic feature transitions for builtin programs
     #[allow(clippy::rc_buffer)]
@@ -4239,7 +4239,7 @@ impl Bank {
     /// Execute a transaction using the provided loaded accounts and update
     /// the executors cache if the transaction was successful.
     #[allow(clippy::too_many_arguments)]
-    fn execute_loaded_transaction(
+    pub fn execute_loaded_transaction(
         &self,
         tx: &SanitizedTransaction,
         loaded_transaction: &mut LoadedTransaction,
