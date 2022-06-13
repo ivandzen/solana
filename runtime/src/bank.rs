@@ -389,7 +389,7 @@ impl AbiExample for CachedExecutors {
 }
 
 impl CachedExecutors {
-    fn new(max_capacity: usize, current_epoch: Epoch) -> Self {
+    pub fn new(max_capacity: usize, current_epoch: Epoch) -> Self {
         Self {
             capacity: max_capacity,
             current_epoch,
@@ -1672,82 +1672,6 @@ impl Bank {
             Some(reward_calc_tracer),
             NewBankOptions::default(),
         )
-    }
-
-    pub fn new_for_emulation(
-        feature_set: Arc<FeatureSet>,
-        compute_budget: Option::<ComputeBudget>,
-        rent_collector: RentCollector,
-        blockhash_queue: RwLock::<BlockhashQueue>,
-        builtin_programs: BuiltinPrograms,
-        sysvar_cache: RwLock::<SysvarCache>
-    ) -> Self {
-        let mut bank = Self {
-            rewrites_skipped_this_slot: Rewrites::default(),
-            rc: BankRc::new(Accounts::default_for_tests(), Slot::default()),
-            src: StatusCacheRc::default(),
-            blockhash_queue: blockhash_queue,
-            ancestors: Ancestors::default(),
-            hash: RwLock::<Hash>::default(),
-            parent_hash: Hash::default(),
-            parent_slot: Slot::default(),
-            hard_forks: Arc::<RwLock<HardForks>>::default(),
-            transaction_count: AtomicU64::default(),
-            transaction_error_count: AtomicU64::default(),
-            transaction_entries_count: AtomicU64::default(),
-            transactions_per_entry_max: AtomicU64::default(),
-            tick_height: AtomicU64::default(),
-            signature_count: AtomicU64::default(),
-            capitalization: AtomicU64::default(),
-            max_tick_height: u64::default(),
-            hashes_per_tick: Option::<u64>::default(),
-            ticks_per_slot: u64::default(),
-            ns_per_slot: u128::default(),
-            genesis_creation_time: UnixTimestamp::default(),
-            slots_per_year: f64::default(),
-            slot: Slot::default(),
-            bank_id: BankId::default(),
-            epoch: Epoch::default(),
-            block_height: u64::default(),
-            collector_id: Pubkey::default(),
-            collector_fees: AtomicU64::default(),
-            fee_calculator: FeeCalculator::default(),
-            fee_rate_governor: FeeRateGovernor::default(),
-            collected_rent: AtomicU64::default(),
-            rent_collector: rent_collector,
-            epoch_schedule: EpochSchedule::default(),
-            inflation: Arc::<RwLock<Inflation>>::default(),
-            stakes_cache: StakesCache::default(),
-            epoch_stakes: HashMap::<Epoch, EpochStakes>::default(),
-            is_delta: AtomicBool::default(),
-            builtin_programs: builtin_programs,
-            compute_budget: compute_budget,
-            builtin_feature_transitions: Arc::<Vec<BuiltinFeatureTransition>>::default(),
-            rewards: RwLock::<Vec<(Pubkey, RewardInfo)>>::default(),
-            cluster_type: Option::<ClusterType>::default(),
-            lazy_rent_collection: AtomicBool::default(),
-            rewards_pool_pubkeys: Arc::<HashSet<Pubkey>>::default(),
-            cached_executors: RwLock::<CachedExecutors>::default(),
-            transaction_debug_keys: Option::<Arc<HashSet<Pubkey>>>::default(),
-            transaction_log_collector_config: Arc::<RwLock<TransactionLogCollectorConfig>>::default(
-            ),
-            transaction_log_collector: Arc::<RwLock<TransactionLogCollector>>::default(),
-            feature_set: feature_set,
-            drop_callback: RwLock::new(OptionalDropCallback(None)),
-            freeze_started: AtomicBool::default(),
-            vote_only_bank: false,
-            cost_tracker: RwLock::<CostTracker>::default(),
-            sysvar_cache: sysvar_cache,
-            accounts_data_size_initial: 0,
-            accounts_data_size_delta_on_chain: AtomicI64::new(0),
-            accounts_data_size_delta_off_chain: AtomicI64::new(0),
-            fee_structure: FeeStructure::default(),
-        };
-
-        let accounts_data_size_initial = bank.get_total_accounts_stats().unwrap().data_len as u64;
-        bank.accounts_data_size_initial = accounts_data_size_initial;
-
-        bank
     }
 
     fn get_rent_collector_from(rent_collector: &RentCollector, epoch: Epoch) -> RentCollector {
@@ -6352,7 +6276,14 @@ impl Bank {
     ) {
         self.rewards_pool_pubkeys =
             Arc::new(genesis_config.rewards_pools.keys().cloned().collect());
+        self.finish_init_builtins(additional_builtins, debug_do_not_add_builtins);
+    }
 
+    fn finish_init_builtins(
+        &mut self,
+        additional_builtins: Option<&Builtins>,
+        debug_do_not_add_builtins: bool,
+    ) {
         let mut builtins = builtins::get();
         if let Some(additional_builtins) = additional_builtins {
             builtins
