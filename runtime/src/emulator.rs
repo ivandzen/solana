@@ -431,7 +431,7 @@ impl EmulatorBank {
         rent_collector.clone_with_epoch(epoch)
     }
 
-    pub fn new(
+    pub fn emu_new(
         slot: u64,
         epoch: u64,
         hash: Hash,
@@ -477,7 +477,7 @@ impl EmulatorBank {
             accounts_data_size_delta_off_chain: AtomicI64::new(0),
             fee_structure: FeeStructure::default(),
         };
-        bank.finish_init(None, false);
+        bank.emu_finish_init(None, false);
 
         let accounts_data_size_initial = bank.get_total_accounts_stats().unwrap().data_len as u64;
         bank.accounts_data_size_initial = accounts_data_size_initial;
@@ -526,34 +526,20 @@ impl EmulatorBank {
         )
     }
 
-    fn load_transaction(
-        &self,
-        _tx: &SanitizedTransaction,
-    ) -> TransactionLoadResult {
-        let loaded_tx = LoadedTransaction {
-            accounts: vec![],
-            program_indices: vec![],
-            rent: 0,
-            rent_debits: RentDebits::default(),
-        };
-
-        (Ok(loaded_tx), None)
-    }
-
-    fn burn_and_purge_account(&self, program_id: &Pubkey, mut account: AccountSharedData) {
+    fn emu_burn_and_purge_account(&self, program_id: &Pubkey, mut account: AccountSharedData) {
         self.capitalization.fetch_sub(account.lamports(), Relaxed);
         // Both resetting account balance to 0 and zeroing the account data
         // is needed to really purge from AccountsDb and flush the Stakes cache
         account.set_lamports(0);
         account.data_as_mut_slice().fill(0);
-        self.store_account(program_id, &account);
+        self.emu_store_account(program_id, &account);
     }
 
     // NOTE: must hold idempotent for the same set of arguments
     /// Add a builtin program account
-    pub fn add_builtin_account(&self, name: &str, program_id: &Pubkey, must_replace: bool) {
+    pub fn emu_add_builtin_account(&self, name: &str, program_id: &Pubkey, must_replace: bool) {
         let existing_genuine_program =
-            self.get_account_with_fixed_root(program_id)
+            self.emu_get_account_with_fixed_root(program_id)
                 .and_then(|account| {
                     // it's very unlikely to be squatted at program_id as non-system account because of burden to
                     // find victim's pubkey/hash. So, when account.owner is indeed native_loader's, it's
@@ -562,7 +548,7 @@ impl EmulatorBank {
                         Some(account)
                     } else {
                         // malicious account is pre-occupying at program_id
-                        self.burn_and_purge_account(program_id, account);
+                        self.emu_burn_and_purge_account(program_id, account);
                         None
                     }
                 });
@@ -602,23 +588,23 @@ impl EmulatorBank {
             name,
             self.inherit_specially_retained_account_fields(&existing_genuine_program),
         );
-        self.store_account_and_update_capitalization(program_id, &account);
+        self.emu_store_account_and_update_capitalization(program_id, &account);
     }
 
     /// Add a precompiled program account
-    pub fn add_precompiled_account(&self, program_id: &Pubkey) {
-        self.add_precompiled_account_with_owner(program_id, native_loader::id())
+    pub fn emu_add_precompiled_account(&self, program_id: &Pubkey) {
+        self.emu_add_precompiled_account_with_owner(program_id, native_loader::id())
     }
 
     // Used by tests to simulate clusters with precompiles that aren't owned by the native loader
-    fn add_precompiled_account_with_owner(&self, program_id: &Pubkey, owner: Pubkey) {
-        if let Some(account) = self.get_account_with_fixed_root(program_id) {
+    fn emu_add_precompiled_account_with_owner(&self, program_id: &Pubkey, owner: Pubkey) {
+        if let Some(account) = self.emu_get_account_with_fixed_root(program_id) {
             if account.executable() {
                 // The account is already executable, that's all we need
                 return;
             } else {
                 // malicious account is pre-occupying at program_id
-                self.burn_and_purge_account(program_id, account);
+                self.emu_burn_and_purge_account(program_id, account);
             }
         };
 
@@ -638,7 +624,7 @@ impl EmulatorBank {
             executable: true,
             rent_epoch,
         });
-        self.store_account_and_update_capitalization(program_id, &account);
+        self.emu_store_account_and_update_capitalization(program_id, &account);
     }
 
     pub fn last_blockhash_and_lamports_per_signature(&self) -> (Hash, u64) {
@@ -868,91 +854,6 @@ impl EmulatorBank {
         }
     }
 
-    pub fn load_and_execute_transaction(
-        &self,
-        tx: &SanitizedTransaction,
-        enable_cpi_recording: bool,
-        enable_log_recording: bool,
-        enable_return_data_recording: bool,
-        timings: &mut ExecuteTimings,
-    ) -> TransactionExecutionResult {
-        let mut error_counters = TransactionErrorMetrics::default();
-
-        let mut load_time = Measure::start("accounts_load");
-        let accs = self.load_transaction(tx);
-        load_time.stop();
-
-        let mut execution_time = Measure::start("execution_time");
-
-        let execution_result = match accs {
-            (Err(e), _nonce) => TransactionExecutionResult::NotExecuted(e.clone()),
-            (Ok(mut loaded_transaction), nonce) => {
-                let mut feature_set_clone_time = Measure::start("feature_set_clone");
-                let feature_set = self.feature_set.clone();
-                feature_set_clone_time.stop();
-                saturating_add_assign!(
-                    timings.execute_accessories.feature_set_clone_us,
-                    feature_set_clone_time.as_us()
-                );
-
-                let compute_budget = if let Some(compute_budget) = self.compute_budget {
-                    compute_budget
-                } else {
-                    let tx_wide_compute_cap = feature_set.is_active(&tx_wide_compute_cap::id());
-                    let compute_unit_limit = if tx_wide_compute_cap {
-                        compute_budget::MAX_COMPUTE_UNIT_LIMIT
-                    } else {
-                        compute_budget::DEFAULT_INSTRUCTION_COMPUTE_UNIT_LIMIT
-                    };
-                    let mut compute_budget = ComputeBudget::new(compute_unit_limit as u64);
-                    if tx_wide_compute_cap {
-                        let mut compute_budget_process_transaction_time =
-                            Measure::start("compute_budget_process_transaction_time");
-                        let process_transaction_result = compute_budget.process_instructions(
-                            tx.message().program_instructions_iter(),
-                            feature_set.is_active(&requestable_heap_size::id()),
-                            feature_set.is_active(&default_units_per_instruction::id()),
-                            feature_set.is_active(&add_set_compute_unit_price_ix::id()),
-                        );
-                        compute_budget_process_transaction_time.stop();
-                        saturating_add_assign!(
-                            timings
-                            .execute_accessories
-                            .compute_budget_process_transaction_us,
-                            compute_budget_process_transaction_time.as_us()
-                        );
-                        if let Err(err) = process_transaction_result {
-                            return TransactionExecutionResult::NotExecuted(err);
-                        }
-                    }
-                    compute_budget
-                };
-
-                self.execute_loaded_transaction(
-                    tx,
-                    &mut loaded_transaction,
-                    compute_budget,
-                    nonce.as_ref().map(DurableNonceFee::from),
-                    enable_cpi_recording,
-                    enable_log_recording,
-                    enable_return_data_recording,
-                    timings,
-                    &mut error_counters,
-                )
-            }
-        };
-
-        execution_time.stop();
-
-        debug!(
-            "load: {}us execute: {}us",
-            load_time.as_us(),
-            execution_time.as_us(),
-        );
-
-        execution_result
-    }
-
     /// Load the accounts data size, in bytes
     pub fn load_accounts_data_size(&self) -> u64 {
         // Mixed integer ops currently not stable, so copying the impl.
@@ -992,11 +893,11 @@ impl EmulatorBank {
         self.accounts_data_size_delta_off_chain.load(Acquire)
     }
 
-    pub fn store_account(&self, pubkey: &Pubkey, account: &AccountSharedData) {
-        self.store_accounts(&[(pubkey, account)])
+    pub fn emu_store_account(&self, pubkey: &Pubkey, account: &AccountSharedData) {
+        self.emu_store_accounts(&[(pubkey, account)])
     }
 
-    pub fn store_accounts(&self, accounts: &[(&Pubkey, &AccountSharedData)]) {
+    pub fn emu_store_accounts(&self, accounts: &[(&Pubkey, &AccountSharedData)]) {
         todo!()
         /*
         assert!(!self.freeze_started());
@@ -1019,12 +920,12 @@ impl EmulatorBank {
 
     /// Technically this issues (or even burns!) new lamports,
     /// so be extra careful for its usage
-    fn store_account_and_update_capitalization(
+    fn emu_store_account_and_update_capitalization(
         &self,
         pubkey: &Pubkey,
         new_account: &AccountSharedData,
     ) {
-        if let Some(old_account) = self.get_account_with_fixed_root(pubkey) {
+        if let Some(old_account) = self.emu_get_account_with_fixed_root(pubkey) {
             match new_account.lamports().cmp(&old_account.lamports()) {
                 std::cmp::Ordering::Greater => {
                     let increased = new_account.lamports() - old_account.lamports();
@@ -1056,10 +957,10 @@ impl EmulatorBank {
                 .fetch_add(new_account.lamports(), Relaxed);
         }
 
-        self.store_account(pubkey, new_account);
+        self.emu_store_account(pubkey, new_account);
     }
 
-    fn finish_init(
+    fn emu_finish_init(
         &mut self,
         additional_builtins: Option<&Builtins>,
         debug_do_not_add_builtins: bool, // False almost every time
@@ -1075,7 +976,7 @@ impl EmulatorBank {
         }
         if !debug_do_not_add_builtins {
             for builtin in builtins.genesis_builtins {
-                self.add_builtin(
+                self.emu_add_builtin(
                     &builtin.name,
                     &builtin.id,
                     builtin.process_instruction_with_context,
@@ -1083,13 +984,13 @@ impl EmulatorBank {
             }
             for precompile in get_precompiles() {
                 if precompile.feature.is_none() {
-                    self.add_precompile(&precompile.program_id);
+                    self.emu_add_precompile(&precompile.program_id);
                 }
             }
         }
         self.builtin_feature_transitions = Arc::new(builtins.feature_transitions);
 
-        self.apply_feature_activations(
+        self.emu_apply_feature_activations(
             ApplyFeatureActivationsCaller::FinishInit,
             debug_do_not_add_builtins,
         );
@@ -1110,7 +1011,7 @@ impl EmulatorBank {
     // running).
     // pro: safer assertion can be enabled inside AccountsDb
     // con: panics!() if called from off-chain processing
-    pub fn get_account_with_fixed_root(&self, pubkey: &Pubkey) -> Option<AccountSharedData> {
+    pub fn emu_get_account_with_fixed_root(&self, pubkey: &Pubkey) -> Option<AccountSharedData> {
         //self.load_slow_with_fixed_root(&self.ancestors, pubkey)
         //    .map(|(acc, _slot)| acc)
         todo!()
@@ -1126,14 +1027,14 @@ impl EmulatorBank {
     }
 
     /// Add an instruction processor to intercept instructions before the dynamic loader.
-    pub fn add_builtin(
+    pub fn emu_add_builtin(
         &mut self,
         name: &str,
         program_id: &Pubkey,
         process_instruction: ProcessInstructionWithContext,
     ) {
         debug!("Adding program {} under {:?}", name, program_id);
-        self.add_builtin_account(name, program_id, false);
+        self.emu_add_builtin_account(name, program_id, false);
         if let Some(entry) = self
             .builtin_programs
             .vec
@@ -1166,15 +1067,15 @@ impl EmulatorBank {
         debug!("Removed program {}", program_id);
     }
 
-    pub fn add_precompile(&mut self, program_id: &Pubkey) {
+    pub fn emu_add_precompile(&mut self, program_id: &Pubkey) {
         debug!("Adding precompiled program {}", program_id);
-        self.add_precompiled_account(program_id);
+        self.emu_add_precompiled_account(program_id);
         debug!("Added precompiled program {:?}", program_id);
     }
 
     // This is called from snapshot restore AND for each epoch boundary
     // The entire code path herein must be idempotent
-    fn apply_feature_activations(
+    fn emu_apply_feature_activations(
         &mut self,
         caller: ApplyFeatureActivationsCaller,
         debug_do_not_add_builtins: bool,
@@ -1185,7 +1086,7 @@ impl EmulatorBank {
             NewFromParent => true,
             WarpFromParent => false,
         };
-        let new_feature_activations = self.compute_active_feature_set(allow_new_activations);
+        let new_feature_activations = self.emu_compute_active_feature_set(allow_new_activations);
 
         if new_feature_activations.contains(&feature_set::pico_inflation::id()) {
             *self.inflation.write().unwrap() = Inflation::pico();
@@ -1201,7 +1102,7 @@ impl EmulatorBank {
         }
 
         if new_feature_activations.contains(&feature_set::spl_token_v3_4_0::id()) {
-            self.replace_program_account(
+            self.emu_replace_program_account(
                 &inline_spl_token::id(),
                 &inline_spl_token::program_v3_4_0::id(),
                 "bank-apply_spl_token_v3_4_0",
@@ -1210,7 +1111,7 @@ impl EmulatorBank {
 
         if new_feature_activations.contains(&feature_set::spl_associated_token_account_v1_1_0::id())
         {
-            self.replace_program_account(
+            self.emu_replace_program_account(
                 &inline_spl_associated_token_account::id(),
                 &inline_spl_associated_token_account::program_v1_1_0::id(),
                 "bank-apply_spl_associated_token_account_v1_1_0",
@@ -1218,13 +1119,13 @@ impl EmulatorBank {
         }
 
         if !debug_do_not_add_builtins {
-            self.apply_builtin_program_feature_transitions(
+            self.emu_apply_builtin_program_feature_transitions(
                 allow_new_activations,
                 &new_feature_activations,
             );
-            self.reconfigure_token2_native_mint();
+            self.emu_reconfigure_token2_native_mint();
         }
-        self.ensure_no_storage_rewards_pool();
+        self.emu_ensure_no_storage_rewards_pool();
 
         if new_feature_activations.contains(&feature_set::cap_accounts_data_len::id()) {
             const ACCOUNTS_DATA_LEN: u64 = 50_000_000_000;
@@ -1233,7 +1134,7 @@ impl EmulatorBank {
     }
 
     // Compute the active feature set based on the current bank state, and return the set of newly activated features
-    fn compute_active_feature_set(&mut self, allow_new_activations: bool) -> HashSet<Pubkey> {
+    fn emu_compute_active_feature_set(&mut self, allow_new_activations: bool) -> HashSet<Pubkey> {
         let mut active = self.feature_set.active.clone();
         let mut inactive = HashSet::new();
         let mut newly_activated = HashSet::new();
@@ -1241,7 +1142,7 @@ impl EmulatorBank {
 
         for feature_id in &self.feature_set.inactive {
             let mut activated = None;
-            if let Some(mut account) = self.get_account_with_fixed_root(feature_id) {
+            if let Some(mut account) = self.emu_get_account_with_fixed_root(feature_id) {
                 if let Some(mut feature) = feature::from_account(&account) {
                     match feature.activated_at {
                         None => {
@@ -1249,7 +1150,7 @@ impl EmulatorBank {
                                 // Feature has been requested, activate it now
                                 feature.activated_at = Some(slot);
                                 if feature::to_account(&feature, &mut account).is_some() {
-                                    self.store_account(feature_id, &account);
+                                    self.emu_store_account(feature_id, &account);
                                 }
                                 newly_activated.insert(*feature_id);
                                 activated = Some(slot);
@@ -1276,7 +1177,7 @@ impl EmulatorBank {
         newly_activated
     }
 
-    fn apply_builtin_program_feature_transitions(
+    fn emu_apply_builtin_program_feature_transitions(
         &mut self,
         only_apply_transitions_for_new_features: bool,
         new_feature_activations: &HashSet<Pubkey>,
@@ -1296,7 +1197,7 @@ impl EmulatorBank {
                 transition.to_action(&should_apply_action_for_feature_transition)
             {
                 match builtin_action {
-                    BuiltinAction::Add(builtin) => self.add_builtin(
+                    BuiltinAction::Add(builtin) => self.emu_add_builtin(
                         &builtin.name,
                         &builtin.id,
                         builtin.process_instruction_with_context,
@@ -1311,19 +1212,19 @@ impl EmulatorBank {
             if precompile.feature.map_or(false, |ref feature_id| {
                 self.feature_set.is_active(feature_id)
             }) {
-                self.add_precompile(&precompile.program_id);
+                self.emu_add_precompile(&precompile.program_id);
             }
         }
     }
 
-    fn replace_program_account(
+    fn emu_replace_program_account(
         &mut self,
         old_address: &Pubkey,
         new_address: &Pubkey,
         datapoint_name: &'static str,
     ) {
-        if let Some(old_account) = self.get_account_with_fixed_root(old_address) {
-            if let Some(new_account) = self.get_account_with_fixed_root(new_address) {
+        if let Some(old_account) = self.emu_get_account_with_fixed_root(old_address) {
+            if let Some(new_account) = self.emu_get_account_with_fixed_root(new_address) {
                 datapoint_info!(datapoint_name, ("slot", self.slot, i64));
 
                 // Burn lamports in the old account
@@ -1331,17 +1232,17 @@ impl EmulatorBank {
                     .fetch_sub(old_account.lamports(), Relaxed);
 
                 // Transfer new account to old account
-                self.store_account(old_address, &new_account);
+                self.emu_store_account(old_address, &new_account);
 
                 // Clear new account
-                self.store_account(new_address, &AccountSharedData::default());
+                self.emu_store_account(new_address, &AccountSharedData::default());
 
                 self.remove_executor(old_address);
             }
         }
     }
 
-    fn reconfigure_token2_native_mint(&mut self) {
+    fn emu_reconfigure_token2_native_mint(&mut self) {
         let reconfigure_token2_native_mint = match self.cluster_type() {
             ClusterType::Development => true,
             ClusterType::Devnet => true,
@@ -1362,7 +1263,7 @@ impl EmulatorBank {
             // https://github.com/solana-labs/solana-program-library/issues/374, ensure that the
             // spl-token 2 native mint account is owned by the spl-token 2 program.
             let store = if let Some(existing_native_mint_account) =
-                self.get_account_with_fixed_root(&inline_spl_token::native_mint::id())
+                self.emu_get_account_with_fixed_root(&inline_spl_token::native_mint::id())
             {
                 if existing_native_mint_account.owner() == &solana_sdk::system_program::id() {
                     native_mint_account.set_lamports(existing_native_mint_account.lamports());
@@ -1377,12 +1278,12 @@ impl EmulatorBank {
             };
 
             if store {
-                self.store_account(&inline_spl_token::native_mint::id(), &native_mint_account);
+                self.emu_store_account(&inline_spl_token::native_mint::id(), &native_mint_account);
             }
         }
     }
 
-    fn ensure_no_storage_rewards_pool(&mut self) {
+    fn emu_ensure_no_storage_rewards_pool(&mut self) {
         let purge_window_epoch = match self.cluster_type() {
             ClusterType::Development => false,
             // never do this for devnet; we're pristine here. :)
@@ -1395,10 +1296,10 @@ impl EmulatorBank {
 
         if purge_window_epoch {
             for reward_pubkey in self.rewards_pool_pubkeys.iter() {
-                if let Some(mut reward_account) = self.get_account_with_fixed_root(reward_pubkey) {
+                if let Some(mut reward_account) = self.emu_get_account_with_fixed_root(reward_pubkey) {
                     if reward_account.lamports() == u64::MAX {
                         reward_account.set_lamports(0);
-                        self.store_account(reward_pubkey, &reward_account);
+                        self.emu_store_account(reward_pubkey, &reward_account);
                         // Adjust capitalization.... it has been wrapping, reducing the real capitalization by 1-lamport
                         self.capitalization.fetch_add(1, Relaxed);
                         info!(
@@ -1455,11 +1356,11 @@ impl EmulatorBank {
         total_accounts_stats
     }
 
-
+    /*
     pub fn simulate_transaction_with_overrides(
         &self,
         transaction: SanitizedTransaction,
-        account_overrides: AccountOverrides,
+        account_overrides: &AccountOverrides,
     ) -> TransactionSimulationResult {
         let account_keys = transaction.message().account_keys();
         let number_of_accounts = account_keys.len();
@@ -1477,7 +1378,7 @@ impl EmulatorBank {
             true,
             true,
             &mut timings,
-            Some(&account_overrides),
+            Some(account_overrides),
         );
 
         let post_simulation_accounts = loaded_transactions
@@ -1535,7 +1436,7 @@ impl EmulatorBank {
         batch.set_needs_unlock(false);
         batch
     }
-
+    */
     #[allow(clippy::type_complexity)]
     pub fn load_and_execute_transactions(
         &self,
@@ -1571,7 +1472,7 @@ impl EmulatorBank {
             .collect();
 
         let mut check_time = Measure::start("check_transactions");
-        let check_results = self.check_transactions(
+        let check_results = self.emu_check_transactions(
             sanitized_txs,
             batch.lock_results(),
             max_age,
@@ -1785,7 +1686,7 @@ impl EmulatorBank {
         }
     }
 
-    pub fn check_transactions(
+    pub fn emu_check_transactions(
         &self,
         sanitized_txs: &[SanitizedTransaction],
         lock_results: &[Result<()>],
@@ -1793,11 +1694,11 @@ impl EmulatorBank {
         error_counters: &mut TransactionErrorMetrics,
     ) -> Vec<TransactionCheckResult> {
         let age_results =
-            self.check_age(sanitized_txs.iter(), lock_results, max_age, error_counters);
+            self.emu_check_age(sanitized_txs.iter(), lock_results, max_age, error_counters);
         self.check_status_cache(sanitized_txs, age_results, error_counters)
     }
 
-    fn check_age<'a>(
+    fn emu_check_age<'a>(
         &self,
         txs: impl Iterator<Item = &'a SanitizedTransaction>,
         lock_results: &[Result<()>],
@@ -1820,7 +1721,7 @@ impl EmulatorBank {
                     let recent_blockhash = tx.message().recent_blockhash();
                     if hash_queue.is_hash_valid_for_age(recent_blockhash, max_age) {
                         (Ok(()), None)
-                    } else if let Some((address, account)) = self.check_transaction_for_nonce(
+                    } else if let Some((address, account)) = self.emu_check_transaction_for_nonce(
                         tx,
                         enable_durable_nonce,
                         &next_durable_nonce,
@@ -1864,7 +1765,7 @@ impl EmulatorBank {
             .is_active(&feature_set::separate_nonce_from_blockhash::id())
     }
 
-    fn check_transaction_for_nonce(
+    fn emu_check_transaction_for_nonce(
         &self,
         tx: &SanitizedTransaction,
         enable_durable_nonce: bool,
@@ -1878,7 +1779,7 @@ impl EmulatorBank {
             .is_active(&feature_set::nonce_must_be_advanceable::ID);
         let nonce_is_advanceable = tx.message().recent_blockhash() != next_durable_nonce.as_hash();
         (durable_nonces_enabled && (nonce_is_advanceable || !nonce_must_be_advanceable))
-            .then(|| self.check_message_for_nonce(tx.message()))
+            .then(|| self.emu_check_message_for_nonce(tx.message()))
             .flatten()
     }
 
@@ -1894,10 +1795,10 @@ impl EmulatorBank {
             .is_some()
     }
 
-    fn check_message_for_nonce(&self, message: &SanitizedMessage) -> Option<TransactionAccount> {
+    fn emu_check_message_for_nonce(&self, message: &SanitizedMessage) -> Option<TransactionAccount> {
         let nonce_address =
             message.get_durable_nonce(self.feature_set.is_active(&nonce_must_be_writable::id()))?;
-        let nonce_account = self.get_account_with_fixed_root(nonce_address)?;
+        let nonce_account = self.emu_get_account_with_fixed_root(nonce_address)?;
         let nonce_data = nonce_account::verify_nonce_account(
             &nonce_account,
             message.recent_blockhash(),
