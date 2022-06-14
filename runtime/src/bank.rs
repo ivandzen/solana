@@ -6276,14 +6276,7 @@ impl Bank {
     ) {
         self.rewards_pool_pubkeys =
             Arc::new(genesis_config.rewards_pools.keys().cloned().collect());
-        self.finish_init_builtins(additional_builtins, debug_do_not_add_builtins);
-    }
 
-    fn finish_init_builtins(
-        &mut self,
-        additional_builtins: Option<&Builtins>,
-        debug_do_not_add_builtins: bool,
-    ) {
         let mut builtins = builtins::get();
         if let Some(additional_builtins) = additional_builtins {
             builtins
