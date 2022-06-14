@@ -320,42 +320,46 @@ impl EmulatorBank {
         Ok(())
     }
 
+    fn get_rent_collector_from(rent_collector: &RentCollector, epoch: Epoch) -> RentCollector {
+        rent_collector.clone_with_epoch(epoch)
+    }
+
     pub fn new(
         slot: u64,
         epoch: u64,
         hash: Hash,
-        fee_rate_governor: FeeRateGovernor,
-        rent_collector: RentCollector,
-        blockhash_queue: RwLock::<BlockhashQueue>,
+        rent_collector: RentCollector, // parse_sysvar.rs (!!!)
+        blockhash_queue: RwLock<BlockhashQueue>,
         cluster_type: ClusterType,
+        accounts_data_size_initial: u64,
     ) -> Self {
         fn new<T: Default>() -> T {
             T::default()
         }
         let feature_set = new();
         let mut bank = Self {
-            blockhash_queue: blockhash_queue,
+            blockhash_queue,
             capitalization: AtomicU64::new(0),
             slot,
             epoch,
-            fee_rate_governor,
-            rent_collector,
+            fee_rate_governor: FeeRateGovernor::default(),
+            rent_collector: Self::get_rent_collector_from(&rent_collector, epoch),
             inflation: Arc::new(RwLock::new(Inflation::default())),
             builtin_programs: new(),
-            cluster_type: Some(cluster_type),
             compute_budget: None,
             builtin_feature_transitions: new(),
+            cluster_type: Some(cluster_type),
             rewards_pool_pubkeys: new(),
             cached_executors: RwLock::new(CachedExecutors::new(MAX_CACHED_EXECUTORS, 0)),
             feature_set: Arc::clone(&feature_set),
             freeze_started: AtomicBool::new(hash != Hash::default()),
             cost_tracker: RwLock::new(CostTracker::default()),
             sysvar_cache: RwLock::new(SysvarCache::default()),
-            accounts_data_size_initial: 0,
+            accounts_data_size_initial,
             accounts_data_size_delta_on_chain: AtomicI64::new(0),
             accounts_data_size_delta_off_chain: AtomicI64::new(0),
         };
-        bank.finish_init_builtins(None, false);
+        bank.finish_init(None, false);
 
         let accounts_data_size_initial = bank.get_total_accounts_stats().unwrap().data_len as u64;
         bank.accounts_data_size_initial = accounts_data_size_initial;
@@ -937,7 +941,7 @@ impl EmulatorBank {
         self.store_account(pubkey, new_account);
     }
 
-    fn finish_init_builtins(
+    fn finish_init(
         &mut self,
         additional_builtins: Option<&Builtins>,
         debug_do_not_add_builtins: bool, // False almost every time
