@@ -338,7 +338,7 @@ mod executor_cache {
     }
 }
 
-const MAX_CACHED_EXECUTORS: usize = 256;
+pub const MAX_CACHED_EXECUTORS: usize = 256;
 #[derive(Debug)]
 struct CachedExecutorsEntry {
     prev_epoch_count: u64,
@@ -7515,7 +7515,7 @@ impl Bank {
 /// Since `apply_feature_activations()` has different behavior depending on its caller, enumerate
 /// those callers explicitly.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum ApplyFeatureActivationsCaller {
+pub enum ApplyFeatureActivationsCaller {
     FinishInit,
     NewFromParent,
     WarpFromParent,
