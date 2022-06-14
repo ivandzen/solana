@@ -340,7 +340,7 @@ mod executor_cache {
 
 pub const MAX_CACHED_EXECUTORS: usize = 256;
 #[derive(Debug)]
-struct CachedExecutorsEntry {
+pub struct CachedExecutorsEntry {
     prev_epoch_count: u64,
     epoch_count: AtomicU64,
     executor: Arc<dyn Executor>,
@@ -497,7 +497,7 @@ impl CachedExecutors {
         }
     }
 
-    fn remove(&mut self, pubkey: &Pubkey) -> Option<CachedExecutorsEntry> {
+    pub fn remove(&mut self, pubkey: &Pubkey) -> Option<CachedExecutorsEntry> {
         let maybe_entry = self.executors.remove(pubkey);
         if let Some(entry) = maybe_entry.as_ref() {
             if entry.hit_count.load(Relaxed) == 1 {
