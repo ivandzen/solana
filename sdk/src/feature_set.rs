@@ -440,6 +440,10 @@ pub mod nonce_must_be_advanceable {
     solana_sdk::declare_id!("3u3Er5Vc2jVcwz4xr2GJeSAXT3fAj6ADHZ4BJMZiScFd");
 }
 
+pub mod vote_authorize_with_seed {
+    solana_sdk::declare_id!("6tRxEYKuy2L5nnv5bgn7iT28MxUbYxp5h7F3Ncf1exrT");
+}
+
 lazy_static! {
     /// Map of feature identifiers to user-visible description
     pub static ref FEATURE_NAMES: HashMap<Pubkey, &'static str> = [
@@ -472,6 +476,7 @@ lazy_static! {
         (stake_merge_with_unmatched_credits_observed::id(), "allow merging active stakes with unmatched credits_observed #18985"),
         (gate_large_block::id(), "validator checks block cost against max limit in realtime, reject if exceeds."),
         (zk_token_sdk_enabled::id(), "enable Zk Token proof program and syscalls"),
+        (curve25519_syscall_enabled::id(), "enable curve25519 syscalls"),
         (versioned_tx_message_enabled::id(), "enable versioned transaction message processing"),
         (libsecp256k1_fail_on_bad_count::id(), "fail libsec256k1_verify if count appears wrong"),
         (instructions_sysvar_owned_by_sysvar::id(), "fix owner for instructions sysvar"),
@@ -543,6 +548,7 @@ lazy_static! {
         (quick_bail_on_panic::id(), "quick bail on panic"),
         (nonce_must_be_authorized::id(), "nonce must be authorized"),
         (nonce_must_be_advanceable::id(), "durable nonces must be advanceable"),
+        (vote_authorize_with_seed::id(), "An instruction you can use to change a vote accounts authority when the current authority is a derived key #25860"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()

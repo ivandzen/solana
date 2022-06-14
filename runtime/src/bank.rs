@@ -5183,8 +5183,12 @@ impl Bank {
         let partitions = self.rent_collection_partitions();
         let count = partitions.len();
         let rent_metrics = RentMetrics::default();
-        partitions.into_iter().for_each(|partition| {
-            self.collect_rent_in_partition(partition, just_rewrites, &rent_metrics)
+        // partitions will usually be 1, but could be more if we skip slots
+        let thread_pool = &self.rc.accounts.accounts_db.thread_pool;
+        thread_pool.install(|| {
+            partitions.into_par_iter().for_each(|partition| {
+                self.collect_rent_in_partition(partition, just_rewrites, &rent_metrics)
+            });
         });
         measure.stop();
         datapoint_info!(
@@ -6816,9 +6820,21 @@ impl Bank {
         last_full_snapshot_slot: Option<Slot>,
     ) -> bool {
         let mut clean_time = Measure::start("clean");
-        if !accounts_db_skip_shrink && self.slot() > 0 {
-            info!("cleaning..");
-            self.clean_accounts(true, true, last_full_snapshot_slot);
+        if !accounts_db_skip_shrink {
+            if self.slot() > 0 {
+                info!("cleaning..");
+                self.clean_accounts(true, true, last_full_snapshot_slot);
+            }
+        } else {
+            // if we are skipping shrink, there should be no uncleaned_roots deferred to later
+            assert_eq!(
+                self.rc
+                    .accounts
+                    .accounts_db
+                    .accounts_index
+                    .uncleaned_roots_len(),
+                0
+            );
         }
         clean_time.stop();
 
