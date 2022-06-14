@@ -3,12 +3,16 @@ use {
     crate::{
         accounts_index::ScanResult,
         account_rent_state::{check_rent_state, RentState},
+        account_overrides::AccountOverrides,
         accounts::{
             PubkeyAccountSlot,
             TransactionLoadResult,
         },
         ancestors::Ancestors,
         bank::{
+            Bank,
+            LoadAndExecuteTransactionsOutput,
+            TransactionSimulationResult,
             ApplyFeatureActivationsCaller,
             inner_instructions_list_from_instruction_trace,
             BuiltinPrograms,
@@ -292,9 +296,6 @@ impl EmulatorBank {
         let require_rent_exempt_accounts = self
             .feature_set
             .is_active(&feature_set::require_rent_exempt_accounts::id());
-        let do_support_realloc = self
-            .feature_set
-            .is_active(&feature_set::do_support_realloc::id());
         let include_account_index_in_err = self
             .feature_set
             .is_active(&feature_set::include_account_index_in_rent_error::id());
@@ -306,7 +307,6 @@ impl EmulatorBank {
                 post_state_info.rent_state.as_ref(),
                 transaction_context,
                 i,
-                do_support_realloc,
                 include_account_index_in_err,
             ) {
                 // Feature gate only wraps the actual error return so that the metrics and debug
@@ -1335,5 +1335,76 @@ impl EmulatorBank {
         });
 
         total_accounts_stats
+    }
+}
+
+
+impl Bank {
+    pub fn simulate_transaction_with_overrides(
+        &self,
+        transaction: SanitizedTransaction,
+        account_overrides: AccountOverrides,
+    ) -> TransactionSimulationResult {
+        let account_keys = transaction.message().account_keys();
+        let number_of_accounts = account_keys.len();
+        let batch = self.prepare_simulation_batch(transaction);
+        let mut timings = ExecuteTimings::default();
+
+        let LoadAndExecuteTransactionsOutput {
+            loaded_transactions,
+            mut execution_results,
+            ..
+        } = self.load_and_execute_transactions(
+            &batch,
+            usize::MAX,
+            false,
+            true,
+            true,
+            &mut timings,
+            Some(&account_overrides),
+        );
+
+        let post_simulation_accounts = loaded_transactions
+            .into_iter()
+            .next()
+            .unwrap()
+            .0
+            .ok()
+            .map(|loaded_transaction| {
+                loaded_transaction
+                    .accounts
+                    .into_iter()
+                    .take(number_of_accounts)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let units_consumed = timings
+            .details
+            .per_program_timings
+            .iter()
+            .fold(0, |acc: u64, (_, program_timing)| {
+                acc.saturating_add(program_timing.accumulated_units)
+            });
+
+        debug!("simulate_transaction: {:?}", timings);
+
+        let execution_result = execution_results.pop().unwrap();
+        let flattened_result = execution_result.flattened_result();
+        let (logs, return_data) = match execution_result {
+            TransactionExecutionResult::Executed { details, .. } => {
+                (details.log_messages, details.return_data)
+            }
+            TransactionExecutionResult::NotExecuted(_) => (None, None),
+        };
+        let logs = logs.unwrap_or_default();
+
+        TransactionSimulationResult {
+            result: flattened_result,
+            logs,
+            post_simulation_accounts,
+            units_consumed,
+            return_data,
+        }
     }
 }
