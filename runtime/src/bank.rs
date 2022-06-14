@@ -1313,7 +1313,7 @@ pub struct Bank {
     /// The builtin programs
     builtin_programs: BuiltinPrograms,
 
-    pub compute_budget: Option<ComputeBudget>,
+    compute_budget: Option<ComputeBudget>,
 
     /// Dynamic feature transitions for builtin programs
     #[allow(clippy::rc_buffer)]
@@ -4239,7 +4239,7 @@ impl Bank {
     /// Execute a transaction using the provided loaded accounts and update
     /// the executors cache if the transaction was successful.
     #[allow(clippy::too_many_arguments)]
-    pub fn execute_loaded_transaction(
+    fn execute_loaded_transaction(
         &self,
         tx: &SanitizedTransaction,
         loaded_transaction: &mut LoadedTransaction,
