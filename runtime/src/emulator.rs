@@ -210,9 +210,6 @@ struct EmulatorBank {
     /// inflation specs
     inflation: Arc<RwLock<Inflation>>,
 
-    /// cache of vote_account and stake_account state for this fork
-    stakes_cache: StakesCache,
-
     /// The builtin programs
     builtin_programs: BuiltinPrograms,
 
@@ -323,20 +320,36 @@ impl EmulatorBank {
         Ok(())
     }
 
-    /*
     pub fn new(
         slot: u64,
-        feature_set: Arc<FeatureSet>,
+        epoch: u64,
+        hash: Hash,
+        fee_rate_governor: FeeRateGovernor,
         rent_collector: RentCollector,
         blockhash_queue: RwLock::<BlockhashQueue>,
+        cluster_type: ClusterType,
     ) -> Self {
+        fn new<T: Default>() -> T {
+            T::default()
+        }
+        let feature_set = new();
         let mut bank = Self {
             blockhash_queue: blockhash_queue,
-            rent_collector: rent_collector,
-            builtin_programs: BuiltinPrograms::default(),
+            capitalization: AtomicU64::new(0),
+            slot,
+            epoch,
+            fee_rate_governor,
+            rent_collector,
+            inflation: Arc::new(RwLock::new(Inflation::default())),
+            builtin_programs: new(),
+            cluster_type: Some(cluster_type),
             compute_budget: None,
+            builtin_feature_transitions: new(),
+            rewards_pool_pubkeys: new(),
             cached_executors: RwLock::new(CachedExecutors::new(MAX_CACHED_EXECUTORS, 0)),
-            feature_set: feature_set,
+            feature_set: Arc::clone(&feature_set),
+            freeze_started: AtomicBool::new(hash != Hash::default()),
+            cost_tracker: RwLock::new(CostTracker::default()),
             sysvar_cache: RwLock::new(SysvarCache::default()),
             accounts_data_size_initial: 0,
             accounts_data_size_delta_on_chain: AtomicI64::new(0),
@@ -349,7 +362,6 @@ impl EmulatorBank {
 
         bank
     }
-     */
 
     pub fn slot(&self) -> Slot {
         self.slot
