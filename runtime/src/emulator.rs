@@ -1795,3 +1795,92 @@ impl EmulatorBank {
         Some((*nonce_address, nonce_account))
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+impl Bank {
+
+
+    pub fn simulate_transaction_with_overrides(
+        &mut self,
+        transaction: SanitizedTransaction,
+        account_overrides: AccountOverrides,
+    ) -> TransactionSimulationResult {
+        {
+            self.feature_set.deactivate(&feature_set::enable_durable_nonce::id());
+        }
+
+        let account_keys = transaction.message().account_keys();
+        let number_of_accounts = account_keys.len();
+        let batch = self.prepare_simulation_batch(transaction);
+        let mut timings = ExecuteTimings::default();
+
+        let LoadAndExecuteTransactionsOutput {
+            loaded_transactions,
+            mut execution_results,
+            ..
+        } = self.load_and_execute_transactions(
+            &batch,
+            usize::MAX,
+            false,
+            true,
+            true,
+            &mut timings,
+            Some(&account_overrides),
+        );
+
+        let post_simulation_accounts = loaded_transactions
+            .into_iter()
+            .next()
+            .unwrap()
+            .0
+            .ok()
+            .map(|loaded_transaction| {
+                loaded_transaction
+                    .accounts
+                    .into_iter()
+                    .take(number_of_accounts)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let units_consumed = timings
+            .details
+            .per_program_timings
+            .iter()
+            .fold(0, |acc: u64, (_, program_timing)| {
+                acc.saturating_add(program_timing.accumulated_units)
+            });
+
+        debug!("simulate_transaction: {:?}", timings);
+
+        let execution_result = execution_results.pop().unwrap();
+        let flattened_result = execution_result.flattened_result();
+        let (logs, return_data) = match execution_result {
+            TransactionExecutionResult::Executed { details, .. } => {
+                (details.log_messages, details.return_data)
+            }
+            TransactionExecutionResult::NotExecuted(_) => (None, None),
+        };
+        let logs = logs.unwrap_or_default();
+
+        TransactionSimulationResult {
+            result: flattened_result,
+            logs,
+            post_simulation_accounts,
+            units_consumed,
+            return_data,
+        }
+    }
+}
