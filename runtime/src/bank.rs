@@ -338,9 +338,9 @@ mod executor_cache {
     }
 }
 
-pub const MAX_CACHED_EXECUTORS: usize = 256;
+const MAX_CACHED_EXECUTORS: usize = 256;
 #[derive(Debug)]
-pub struct CachedExecutorsEntry {
+struct CachedExecutorsEntry {
     prev_epoch_count: u64,
     epoch_count: AtomicU64,
     executor: Arc<dyn Executor>,
@@ -360,7 +360,7 @@ impl Clone for CachedExecutorsEntry {
 
 /// LFU Cache of executors with single-epoch memory of usage counts
 #[derive(Debug)]
-pub struct CachedExecutors {
+struct CachedExecutors {
     capacity: usize,
     current_epoch: Epoch,
     pub(self) executors: HashMap<Pubkey, CachedExecutorsEntry>,
@@ -389,7 +389,7 @@ impl AbiExample for CachedExecutors {
 }
 
 impl CachedExecutors {
-    pub fn new(max_capacity: usize, current_epoch: Epoch) -> Self {
+    fn new(max_capacity: usize, current_epoch: Epoch) -> Self {
         Self {
             capacity: max_capacity,
             current_epoch,
@@ -428,7 +428,7 @@ impl CachedExecutors {
         }
     }
 
-    pub fn get(&self, pubkey: &Pubkey) -> Option<Arc<dyn Executor>> {
+    fn get(&self, pubkey: &Pubkey) -> Option<Arc<dyn Executor>> {
         if let Some(entry) = self.executors.get(pubkey) {
             self.stats.hits.fetch_add(1, Relaxed);
             entry.epoch_count.fetch_add(1, Relaxed);
@@ -440,7 +440,7 @@ impl CachedExecutors {
         }
     }
 
-    pub fn put(&mut self, executors: &[(&Pubkey, Arc<dyn Executor>)]) {
+    fn put(&mut self, executors: &[(&Pubkey, Arc<dyn Executor>)]) {
         let mut new_executors: Vec<_> = executors
             .iter()
             .filter_map(|(key, executor)| {
@@ -497,7 +497,7 @@ impl CachedExecutors {
         }
     }
 
-    pub fn remove(&mut self, pubkey: &Pubkey) -> Option<CachedExecutorsEntry> {
+    fn remove(&mut self, pubkey: &Pubkey) -> Option<CachedExecutorsEntry> {
         let maybe_entry = self.executors.remove(pubkey);
         if let Some(entry) = maybe_entry.as_ref() {
             if entry.hit_count.load(Relaxed) == 1 {
@@ -8276,7 +8276,7 @@ impl Bank {
 /// Since `apply_feature_activations()` has different behavior depending on its caller, enumerate
 /// those callers explicitly.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum ApplyFeatureActivationsCaller {
+enum ApplyFeatureActivationsCaller {
     FinishInit,
     NewFromParent,
     WarpFromParent,
