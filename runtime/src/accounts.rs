@@ -214,7 +214,7 @@ impl Accounts {
         }
     }
 
-    pub(crate) fn new_empty(accounts_db: AccountsDb) -> Self {
+    pub fn new_empty(accounts_db: AccountsDb) -> Self {
         Self {
             accounts_db: Arc::new(accounts_db),
             account_locks: Mutex::new(AccountLocks::default()),

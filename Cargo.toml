@@ -86,6 +86,7 @@ members = [
     "watchtower",
     "zk-token-sdk",
     "solana-accountsdb-plugin-postgres",
+    "neon-tracer"
 ]
 
 exclude = [

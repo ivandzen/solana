@@ -579,7 +579,7 @@ impl AbiExample for BankRc {
 }
 
 impl BankRc {
-    pub(crate) fn new(accounts: Accounts, slot: Slot) -> Self {
+    pub fn new(accounts: Accounts, slot: Slot) -> Self {
         Self {
             accounts: Arc::new(accounts),
             parent: RwLock::new(None),
@@ -7522,7 +7522,7 @@ impl Bank {
 
     /// Create a bank from explicit arguments and deserialized fields from snapshot
     #[allow(clippy::float_cmp)]
-    pub(crate) fn tracer_new(
+    pub fn tracer_new(
         bank_rc: BankRc,
         genesis_config: &GenesisConfig,
         fields: BankFieldsToDeserialize,

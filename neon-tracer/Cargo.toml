@@ -1,0 +1,13 @@
+[package]
+name = "neon-tracer"
+version = "1.11.0"
+description = "Neon Tracer"
+authors = ["Neon Labs <il@neonlabs.org>"]
+repository = "https://github.com/neonlabsorg/solana"
+license = "Apache-2.0"
+homepage = "https://solana.com/"
+edition = "2021"
+
+[dependencies]
+solana-runtime = { path = "../runtime", version = "=1.11.0" }
+solana-sdk = { path = "../sdk", version = "=1.11.0" }
