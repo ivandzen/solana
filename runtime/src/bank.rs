@@ -71,7 +71,7 @@ use {
         vote_parser,
     },
     byteorder::{ByteOrder, LittleEndian},
-    dashmap::DashMap,
+    dashmap::{DashMap, DashSet},
     itertools::Itertools,
     log::*,
     rand::Rng,
@@ -173,6 +173,7 @@ use {
 struct RewardsMetrics {
     load_vote_and_stake_accounts_us: AtomicU64,
     calculate_points_us: AtomicU64,
+    redeem_rewards_us: u64,
     store_stake_accounts_us: AtomicU64,
     store_vote_accounts_us: AtomicU64,
     invalid_cached_vote_accounts: usize,
@@ -250,7 +251,7 @@ impl RentDebits {
     }
 }
 
-type BankStatusCache = StatusCache<Result<()>>;
+pub type BankStatusCache = StatusCache<Result<()>>;
 #[frozen_abi(digest = "2YZk2K45HmmAafmxPJnYVXyQ7uA7WuBrRkpwrCawdK31")]
 pub type BankSlotDelta = SlotDelta<Result<()>>;
 
@@ -610,11 +611,6 @@ impl StatusCacheRc {
             .cloned()
             .sorted()
             .collect()
-    }
-
-    pub fn append(&self, slot_deltas: &[BankSlotDelta]) {
-        let mut sc = self.status_cache.write().unwrap();
-        sc.append(slot_deltas);
     }
 }
 
@@ -1953,6 +1949,7 @@ impl Bank {
                             metrics.calculate_points_us.load(Relaxed),
                             i64
                         ),
+                        ("redeem_rewards_us", metrics.redeem_rewards_us, i64),
                         (
                             "store_stake_accounts_us",
                             metrics.store_stake_accounts_us.load(Relaxed),
@@ -2602,7 +2599,7 @@ impl Bank {
             .filter_map(|id| self.feature_set.activated_slot(id))
             .collect::<Vec<_>>();
         slots.sort_unstable();
-        slots.get(0).cloned().unwrap_or_else(|| {
+        slots.first().cloned().unwrap_or_else(|| {
             self.feature_set
                 .activated_slot(&feature_set::pico_inflation::id())
                 .unwrap_or(0)
@@ -2797,7 +2794,27 @@ impl Bank {
                         }
                     };
                     if cached_stake_account != &stake_account {
-                        invalid_cached_stake_accounts.fetch_add(1, Relaxed);
+                        let mut cached_account = cached_stake_account.account().clone();
+                        // We could have collected rent on the loaded account already in this new epoch (we could be at partition_index 12, for example).
+                        // So, we may need to adjust the rent_epoch of the cached account. So, update rent_epoch and compare just the accounts.
+                        ExpectedRentCollection::maybe_update_rent_epoch_on_load(
+                            &mut cached_account,
+                            &SlotInfoInEpoch::new_small(self.slot()),
+                            &SlotInfoInEpoch::new_small(self.slot()),
+                            self.epoch_schedule(),
+                            self.rent_collector(),
+                            stake_pubkey,
+                            &self.rewrites_skipped_this_slot,
+                        );
+                        if &cached_account != stake_account.account() {
+                            info!(
+                                "cached stake account mismatch: {}: {:?}, {:?}",
+                                stake_pubkey,
+                                cached_account,
+                                stake_account.account()
+                            );
+                            invalid_cached_stake_accounts.fetch_add(1, Relaxed);
+                        }
                     }
                     let stake_delegation = (*stake_pubkey, stake_account);
                     let mut vote_delegations = if let Some(vote_delegations) =
@@ -2994,7 +3011,7 @@ impl Bank {
     }
 
     /// iterate over all stakes, redeem vote credits for each stake we can
-    ///   successfully load and parse, return the lamport value of one point
+    /// successfully load and parse, return the lamport value of one point
     fn pay_validator_rewards_with_thread_pool(
         &mut self,
         rewarded_epoch: Epoch,
@@ -3005,6 +3022,12 @@ impl Bank {
         metrics: &mut RewardsMetrics,
         update_rewards_from_cached_accounts: bool,
     ) -> f64 {
+        struct StakeReward {
+            stake_pubkey: Pubkey,
+            stake_reward_info: RewardInfo,
+            stake_account: AccountSharedData,
+        }
+
         let stake_history = self.stakes_cache.stakes().history().clone();
         let vote_with_stake_delegations_map = {
             let mut m = Measure::start("load_vote_and_stake_accounts_us");
@@ -3092,7 +3115,7 @@ impl Bank {
         );
 
         let mut m = Measure::start("redeem_rewards");
-        let mut stake_rewards = thread_pool.install(|| {
+        let stake_rewards: Vec<StakeReward> = thread_pool.install(|| {
             stake_delegation_iterator
                 .filter_map(|(vote_pubkey, vote_state, (stake_pubkey, stake_account))| {
                     // curry closure to add the contextual stake_pubkey
@@ -3127,21 +3150,17 @@ impl Bank {
                             *vote_rewards_sum = vote_rewards_sum.saturating_add(voters_reward);
                         }
 
-                        // store stake account even if stakers_reward is 0
-                        // because credits observed has changed
-                        self.store_account(&stake_pubkey, &stake_account);
-
-                        if stakers_reward > 0 {
-                            return Some((
-                                stake_pubkey,
-                                RewardInfo {
-                                    reward_type: RewardType::Staking,
-                                    lamports: stakers_reward as i64,
-                                    post_balance: stake_account.lamports(),
-                                    commission: Some(vote_state.commission),
-                                },
-                            ));
-                        }
+                        let post_balance = stake_account.lamports();
+                        return Some(StakeReward {
+                            stake_pubkey,
+                            stake_reward_info: RewardInfo {
+                                reward_type: RewardType::Staking,
+                                lamports: i64::try_from(stakers_reward).unwrap(),
+                                post_balance,
+                                commission: Some(vote_state.commission),
+                            },
+                            stake_account,
+                        });
                     } else {
                         debug!(
                             "stake_state::redeem_rewards() failed for {}: {:?}",
@@ -3153,9 +3172,26 @@ impl Bank {
                 .collect()
         });
         m.stop();
+        metrics.redeem_rewards_us += m.as_us();
+
+        // store stake account even if stakers_reward is 0
+        // because credits observed has changed
+        let mut m = Measure::start("store_stake_account");
+        let accounts_to_store = stake_rewards
+            .iter()
+            .map(|x| (&x.stake_pubkey, &x.stake_account))
+            .collect::<Vec<_>>();
+        self.store_accounts(&accounts_to_store);
+        m.stop();
         metrics
             .store_stake_accounts_us
             .fetch_add(m.as_us(), Relaxed);
+
+        let mut stake_rewards = stake_rewards
+            .into_iter()
+            .filter(|x| x.stake_reward_info.lamports > 0)
+            .map(|x| (x.stake_pubkey, x.stake_reward_info))
+            .collect();
 
         let mut m = Measure::start("store_vote_accounts");
         let mut vote_rewards = vote_account_rewards
@@ -4037,7 +4073,7 @@ impl Bank {
     fn is_transaction_already_processed(
         &self,
         sanitized_tx: &SanitizedTransaction,
-        status_cache: &StatusCache<Result<()>>,
+        status_cache: &BankStatusCache,
     ) -> bool {
         let key = sanitized_tx.message_hash();
         let transaction_blockhash = sanitized_tx.message().recent_blockhash();
@@ -4699,7 +4735,7 @@ impl Bank {
         // operations being done and treating them like a signature
         for (program_id, instruction) in message.program_instructions_iter() {
             if secp256k1_program::check_id(program_id) || ed25519_program::check_id(program_id) {
-                if let Some(num_verifies) = instruction.data.get(0) {
+                if let Some(num_verifies) = instruction.data.first() {
                     num_signatures = num_signatures.saturating_add(u64::from(*num_verifies));
                 }
             }
@@ -5151,6 +5187,25 @@ impl Bank {
     /// after deserialize, populate rewrites with accounts that would normally have had their data rewritten in this slot due to rent collection (but didn't)
     pub fn prepare_rewrites_for_hash(&self) {
         self.collect_rent_eagerly(true);
+    }
+
+    /// Get stake and stake node accounts
+    pub(crate) fn get_stake_accounts(&self, minimized_account_set: &DashSet<Pubkey>) {
+        self.stakes_cache
+            .stakes()
+            .stake_delegations()
+            .iter()
+            .for_each(|(pubkey, _)| {
+                minimized_account_set.insert(*pubkey);
+            });
+
+        self.stakes_cache
+            .stakes()
+            .staked_nodes()
+            .par_iter()
+            .for_each(|(pubkey, _)| {
+                minimized_account_set.insert(*pubkey);
+            });
     }
 
     fn collect_rent_eagerly(&self, just_rewrites: bool) {
@@ -5691,7 +5746,7 @@ impl Bank {
         partitions
     }
 
-    fn fixed_cycle_partitions_between_slots(
+    pub(crate) fn fixed_cycle_partitions_between_slots(
         &self,
         starting_slot: Slot,
         ending_slot: Slot,
@@ -5732,7 +5787,7 @@ impl Bank {
         )
     }
 
-    fn variable_cycle_partitions_between_slots(
+    pub(crate) fn variable_cycle_partitions_between_slots(
         &self,
         starting_slot: Slot,
         ending_slot: Slot,
@@ -5941,7 +5996,7 @@ impl Bank {
             && self.slot_count_per_normal_epoch() < self.slot_count_in_two_day()
     }
 
-    fn use_fixed_collection_cycle(&self) -> bool {
+    pub(crate) fn use_fixed_collection_cycle(&self) -> bool {
         // Force normal behavior, disabling fixed collection cycle for manual local testing
         #[cfg(not(test))]
         if self.slot_count_per_normal_epoch() == solana_sdk::epoch_schedule::MINIMUM_SLOTS_PER_EPOCH
@@ -6171,7 +6226,7 @@ impl Bank {
         assert!(!self.freeze_started());
         self.rc
             .accounts
-            .store_accounts_cached(self.slot(), accounts);
+            .store_accounts_cached((self.slot(), accounts));
         let mut m = Measure::start("stakes_cache.check_and_store");
         for (pubkey, account) in accounts {
             self.stakes_cache.check_and_store(pubkey, account);

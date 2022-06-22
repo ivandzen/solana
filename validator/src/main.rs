@@ -259,7 +259,7 @@ fn wait_for_restart_window(
                         leader_schedule.pop_front();
                     }
                     while upcoming_idle_windows
-                        .get(0)
+                        .first()
                         .map(|(slot, _)| *slot < epoch_info.absolute_slot)
                         .unwrap_or(false)
                     {
@@ -276,7 +276,7 @@ fn wait_for_restart_window(
                             if idle_slots >= min_idle_slots {
                                 Ok(())
                             } else {
-                                Err(match upcoming_idle_windows.get(0) {
+                                Err(match upcoming_idle_windows.first() {
                                     Some((starting_slot, length_in_slots)) => {
                                         format!(
                                             "Next idle window in {} slots, for {} slots",
@@ -1209,6 +1209,11 @@ pub fn main() {
                 .long("tpu-use-quic")
                 .takes_value(false)
                 .help("Use QUIC to send transactions."),
+        )
+        .arg(
+            Arg::with_name("enable_quic_servers")
+                .hidden(true)
+                .long("enable-quic-servers")
         )
         .arg(
             Arg::with_name("tpu_connection_pool_size")
@@ -2231,6 +2236,7 @@ pub fn main() {
     let accounts_shrink_optimize_total_space =
         value_t_or_exit!(matches, "accounts_shrink_optimize_total_space", bool);
     let tpu_use_quic = matches.is_present("tpu_use_quic");
+    let enable_quic_servers = matches.is_present("enable_quic_servers");
     let tpu_connection_pool_size = value_t_or_exit!(matches, "tpu_connection_pool_size", usize);
 
     let shrink_ratio = value_t_or_exit!(matches, "accounts_shrink_ratio", f64);
@@ -2573,6 +2579,7 @@ pub fn main() {
             bpf_jit: !matches.is_present("no_bpf_jit"),
             ..RuntimeConfig::default()
         },
+        enable_quic_servers,
         ..ValidatorConfig::default()
     };
 

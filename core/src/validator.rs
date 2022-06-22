@@ -25,7 +25,7 @@ use {
     },
     crossbeam_channel::{bounded, unbounded, Receiver},
     rand::{thread_rng, Rng},
-    solana_client::connection_cache::ConnectionCache,
+    solana_client::connection_cache::{ConnectionCache, UseQUIC},
     solana_entry::poh::compute_hash_time_ns,
     solana_geyser_plugin_manager::geyser_plugin_service::GeyserPluginService,
     solana_gossip::{
@@ -90,7 +90,7 @@ use {
         clock::Slot,
         epoch_schedule::MAX_LEADER_SCHEDULE_EPOCH_OFFSET,
         exit::Exit,
-        genesis_config::GenesisConfig,
+        genesis_config::{ClusterType, GenesisConfig},
         hash::Hash,
         pubkey::Pubkey,
         shred_version::compute_shred_version,
@@ -176,6 +176,7 @@ pub struct ValidatorConfig {
     pub wait_to_vote_slot: Option<Slot>,
     pub ledger_column_options: LedgerColumnOptions,
     pub runtime_config: RuntimeConfig,
+    pub enable_quic_servers: bool,
 }
 
 impl Default for ValidatorConfig {
@@ -237,6 +238,7 @@ impl Default for ValidatorConfig {
             wait_to_vote_slot: None,
             ledger_column_options: LedgerColumnOptions::default(),
             runtime_config: RuntimeConfig::default(),
+            enable_quic_servers: false,
         }
     }
 }
@@ -699,10 +701,12 @@ impl Validator {
             };
 
         let mut block_commitment_cache = BlockCommitmentCache::default();
+        let bank_forks_guard = bank_forks.read().unwrap();
         block_commitment_cache.initialize_slots(
-            bank_forks.read().unwrap().working_bank().slot(),
-            bank_forks.read().unwrap().root(),
+            bank_forks_guard.working_bank().slot(),
+            bank_forks_guard.root(),
         );
+        drop(bank_forks_guard);
         let block_commitment_cache = Arc::new(RwLock::new(block_commitment_cache));
 
         let optimistically_confirmed_bank =
@@ -749,6 +753,7 @@ impl Validator {
         };
         let poh_recorder = Arc::new(Mutex::new(poh_recorder));
 
+        let use_quic = UseQUIC::new(use_quic).expect("Failed to initialize QUIC flags");
         let connection_cache = Arc::new(ConnectionCache::new(use_quic, tpu_connection_pool_size));
 
         let rpc_override_health_check = Arc::new(AtomicBool::new(false));
@@ -776,35 +781,28 @@ impl Validator {
             } else {
                 None
             };
-
-            let json_rpc_service = JsonRpcService::new(
-                rpc_addr,
-                config.rpc_config.clone(),
-                config.snapshot_config.clone(),
-                bank_forks.clone(),
-                block_commitment_cache.clone(),
-                blockstore.clone(),
-                cluster_info.clone(),
-                Some(poh_recorder.clone()),
-                genesis_config.hash(),
-                ledger_path,
-                config.validator_exit.clone(),
-                config.known_validators.clone(),
-                rpc_override_health_check.clone(),
-                optimistically_confirmed_bank.clone(),
-                config.send_transaction_service_config.clone(),
-                max_slots.clone(),
-                leader_schedule_cache.clone(),
-                connection_cache.clone(),
-                max_complete_transaction_status_slot,
-            )
-            .unwrap_or_else(|s| {
-                error!("Failed to create JSON RPC Service: {}", s);
-                abort();
-            });
-
             (
-                Some(json_rpc_service),
+                Some(JsonRpcService::new(
+                    rpc_addr,
+                    config.rpc_config.clone(),
+                    config.snapshot_config.clone(),
+                    bank_forks.clone(),
+                    block_commitment_cache.clone(),
+                    blockstore.clone(),
+                    cluster_info.clone(),
+                    Some(poh_recorder.clone()),
+                    genesis_config.hash(),
+                    ledger_path,
+                    config.validator_exit.clone(),
+                    config.known_validators.clone(),
+                    rpc_override_health_check.clone(),
+                    optimistically_confirmed_bank.clone(),
+                    config.send_transaction_service_config.clone(),
+                    max_slots.clone(),
+                    leader_schedule_cache.clone(),
+                    connection_cache.clone(),
+                    max_complete_transaction_status_slot,
+                )),
                 if !config.rpc_config.full_api {
                     None
                 } else {
@@ -980,6 +978,18 @@ impl Validator {
             &connection_cache,
         );
 
+        let enable_quic_servers = if genesis_config.cluster_type == ClusterType::MainnetBeta {
+            config.enable_quic_servers
+        } else {
+            if config.enable_quic_servers {
+                warn!(
+                    "ignoring --enable-quic-servers. QUIC is always enabled for cluster type: {:?}",
+                    genesis_config.cluster_type
+                );
+            }
+            true
+        };
+
         let tpu = Tpu::new(
             &cluster_info,
             &poh_recorder,
@@ -1011,6 +1021,7 @@ impl Validator {
             &cost_model,
             &connection_cache,
             &identity_keypair,
+            enable_quic_servers,
         );
 
         datapoint_info!(
@@ -2091,20 +2102,7 @@ mod tests {
             *start_progress.read().unwrap(),
             ValidatorStartProgress::Running
         );
-
-        // spawn a new thread to wait for validator close
-        let (sender, receiver) = bounded(0);
-        let _ = thread::spawn(move || {
-            validator.close();
-            sender.send(()).unwrap();
-        });
-
-        // exit can deadlock. put an upper-bound on how long we wait for it
-        let timeout = Duration::from_secs(30);
-        if let Err(RecvTimeoutError::Timeout) = receiver.recv_timeout(timeout) {
-            panic!("timeout for closing validator");
-        }
-
+        validator.close();
         remove_dir_all(validator_ledger_path).unwrap();
     }
 

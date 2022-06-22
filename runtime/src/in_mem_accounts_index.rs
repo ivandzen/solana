@@ -268,7 +268,7 @@ impl<T: IndexValue> InMemAccountsIndex<T> {
 
     fn remove_if_slot_list_empty_value(&self, slot_list: SlotSlice<T>) -> bool {
         if slot_list.is_empty() {
-            self.stats().inc_delete(self.bin);
+            self.stats().inc_delete();
             true
         } else {
             false
@@ -294,6 +294,7 @@ impl<T: IndexValue> InMemAccountsIndex<T> {
                     //  the arc, but someone may already have retrieved a clone of it.
                     // account index in_mem flushing is one such possibility
                     self.delete_disk_key(occupied.key());
+                    self.stats().dec_mem_count(self.bin);
                     occupied.remove();
                 }
                 result
@@ -417,7 +418,7 @@ impl<T: IndexValue> InMemAccountsIndex<T> {
                                 previous_slot_entry_was_cached,
                             );
                             if !already_existed {
-                                self.stats().inc_insert(self.bin);
+                                self.stats().inc_insert();
                             }
                         } else {
                             // go to in-mem cache first
@@ -434,7 +435,7 @@ impl<T: IndexValue> InMemAccountsIndex<T> {
                                 disk_entry
                             } else {
                                 // not on disk, so insert new thing
-                                self.stats().inc_insert(self.bin);
+                                self.stats().inc_insert();
                                 new_value.into_account_map_entry(&self.storage)
                             };
                             assert!(new_value.dirty());
@@ -676,7 +677,7 @@ impl<T: IndexValue> InMemAccountsIndex<T> {
         self.update_entry_stats(m, found_in_mem);
         let stats = self.stats();
         if !already_existed {
-            stats.inc_insert(self.bin);
+            stats.inc_insert();
         } else {
             Self::update_stat(&stats.updates_in_mem, 1);
         }
@@ -1018,23 +1019,21 @@ impl<T: IndexValue> InMemAccountsIndex<T> {
         }
 
         // during startup, nothing should be in the in-mem map
+        let map_internal = self.map_internal.read().unwrap();
         assert!(
-            self.map_internal.read().unwrap().is_empty(),
+            map_internal.is_empty(),
             "len: {}, first: {:?}",
-            self.map_internal.read().unwrap().len(),
-            self.map_internal
-                .read()
-                .unwrap()
-                .iter()
-                .take(1)
-                .collect::<Vec<_>>()
+            map_internal.len(),
+            map_internal.iter().take(1).collect::<Vec<_>>()
         );
+        drop(map_internal);
 
         let mut duplicates = vec![];
 
         // merge all items into the disk index now
         let disk = self.bucket.as_ref().unwrap();
         let mut duplicate = vec![];
+        let mut count = 0;
         insert.into_iter().for_each(|(slot, k, v)| {
             let entry = (slot, v);
             let new_ref_count = if v.is_cached() { 0 } else { 1 };
@@ -1050,12 +1049,14 @@ impl<T: IndexValue> InMemAccountsIndex<T> {
                         Some((slot_list, ref_count))
                     }
                     None => {
+                        count += 1;
                         // not on disk, insert it
                         Some((vec![entry], new_ref_count))
                     }
                 }
             });
         });
+        self.stats().inc_insert_count(count);
         self.startup_info
             .lock()
             .unwrap()
